@@ -10,6 +10,9 @@ import { LEAD_STAGES, ACTIVITY_TYPES } from '../constants/leadEnums';
 import SiteVisitTracker from '../components/SiteVisitTracker';
 import SearchableSelect from '../components/SearchableSelect';
 import { getCurrentPosition } from '../utils/geo';
+import FormField from '../components/FormField';
+import useFormValidation from '../hooks/useFormValidation';
+import { required, isBlank } from '../utils/validation';
 
 const TABS = [
   { key: 'overview', label: 'Overview' },
@@ -39,6 +42,12 @@ export default function LeadDetail({ isAgent }) {
   const [showFollowUpForm, setShowFollowUpForm] = useState(false);
   const [fuForm, setFuForm] = useState(emptyFollowUpForm);
   const [savingFu, setSavingFu] = useState(false);
+  const fuV = useFormValidation(fuForm, {
+    stage: required('Lead stage'),
+    activityType: required('Activity type'),
+    response: required('Response'),
+    nextFollowUpAt: (val, all) => (all.reminderEnabled && isBlank(val) ? 'Next follow-up date is required when a reminder is set.' : ''),
+  });
 
   const loadLead = async () => {
     setLoading(true);
@@ -63,8 +72,14 @@ export default function LeadDetail({ isAgent }) {
 
   const setTab = (key) => setSearchParams({ tab: key });
 
+  const setFuField = (key, val) => {
+    setFuForm((f) => ({ ...f, [key]: val }));
+    fuV.touch(key);
+  };
+
   const handleSaveFollowUp = async (e) => {
     e.preventDefault();
+    if (!fuV.validate()) return;
     setSavingFu(true);
     try {
       let gps = {};
@@ -94,6 +109,7 @@ export default function LeadDetail({ isAgent }) {
         ...gps,
       }));
       setFuForm((f) => ({ ...emptyFollowUpForm, stage: f.stage }));
+      fuV.reset();
       setShowFollowUpForm(false);
       await loadLead();
       setTab(fuForm.activityType === 'Site Visit' ? 'sitevisits' : 'followups');
@@ -112,7 +128,7 @@ export default function LeadDetail({ isAgent }) {
       <div className="row-flex" style={{ justifyContent: 'space-between', marginBottom: 14 }}>
         <button className="link-btn" onClick={() => navigate(-1)}>← Back to leads</button>
         {isAgent && (
-          <button className="btn btn-primary" onClick={() => setShowFollowUpForm(!showFollowUpForm)}>
+          <button className="btn btn-primary" onClick={() => { if (showFollowUpForm) { setShowFollowUpForm(false); fuV.reset(); } else setShowFollowUpForm(true); }}>
             {showFollowUpForm ? 'Cancel' : '+ Add Follow-up'}
           </button>
         )}
@@ -131,55 +147,46 @@ export default function LeadDetail({ isAgent }) {
       {isAgent && showFollowUpForm && (
         <div className="card" style={{ marginBottom: 20 }}>
           <div className="card-title" style={{ marginBottom: 16 }}>Add Follow-up</div>
-          <form onSubmit={handleSaveFollowUp}>
+          <form onSubmit={handleSaveFollowUp} noValidate>
             <div className="form-grid">
-              <div className="form-field">
-                <label>Status (Lead Stage)</label>
-                <select value={fuForm.stage} onChange={(e) => setFuForm({ ...fuForm, stage: e.target.value })}>
+              <FormField label="Status (Lead Stage)" required error={fuV.show('stage')}>
+                <select value={fuForm.stage} onChange={(e) => setFuField('stage', e.target.value)} onBlur={() => fuV.touch('stage')}>
                   {LEAD_STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
-              </div>
-              <div className="form-field">
-                <label>Activity Type</label>
-                <select value={fuForm.activityType} onChange={(e) => setFuForm({ ...fuForm, activityType: e.target.value })}>
+              </FormField>
+              <FormField label="Activity Type" required error={fuV.show('activityType')}>
+                <select value={fuForm.activityType} onChange={(e) => setFuField('activityType', e.target.value)}>
                   {ACTIVITY_TYPES.map((a) => <option key={a} value={a}>{a}</option>)}
                 </select>
-              </div>
-              <div className="form-field">
-                <label>Project (optional)</label>
+              </FormField>
+              <FormField label="Project (optional)" hint={myProjects.length === 0 ? 'No projects are assigned to you yet.' : undefined}>
                 <SearchableSelect
                   variant="form"
                   placeholder="Select a project…"
                   value={fuForm.projectId}
-                  onChange={(val) => setFuForm({ ...fuForm, projectId: val })}
+                  onChange={(val) => setFuField('projectId', val)}
                   options={myProjects.map((p) => ({ value: p.id, label: p.name }))}
                 />
-                {myProjects.length === 0 && (
-                  <div className="cell-sub" style={{ marginTop: 4 }}>No projects are assigned to you yet.</div>
-                )}
-              </div>
-              <div className="form-field">
-                <label>Response</label>
-                <select value={fuForm.response} onChange={(e) => setFuForm({ ...fuForm, response: e.target.value })}>
+              </FormField>
+              <FormField label="Response" required error={fuV.show('response')}>
+                <select value={fuForm.response} onChange={(e) => setFuField('response', e.target.value)}>
                   <option value="positive">Positive</option>
                   <option value="neutral">Neutral</option>
                   <option value="negative">Negative</option>
                 </select>
-              </div>
-              <div className="form-field" style={{ gridColumn: '1 / -1' }}>
-                <label>Description</label>
-                <input value={fuForm.description} onChange={(e) => setFuForm({ ...fuForm, description: e.target.value })} placeholder="e.g. Customer requested a site visit." />
-              </div>
-              <div className="form-field">
-                <label>Next Follow-up Date</label>
-                <input type="datetime-local" value={fuForm.nextFollowUpAt} onChange={(e) => setFuForm({ ...fuForm, nextFollowUpAt: e.target.value })} />
-              </div>
-              <div className="form-field" style={{ justifyContent: 'center' }}>
+              </FormField>
+              <FormField label="Description" style={{ gridColumn: '1 / -1' }}>
+                <input value={fuForm.description} onChange={(e) => setFuField('description', e.target.value)} placeholder="e.g. Customer requested a site visit." />
+              </FormField>
+              <FormField label="Next Follow-up Date" error={fuV.show('nextFollowUpAt')}>
+                <input type="datetime-local" value={fuForm.nextFollowUpAt} onChange={(e) => setFuField('nextFollowUpAt', e.target.value)} onBlur={() => fuV.touch('nextFollowUpAt')} />
+              </FormField>
+              <FormField style={{ justifyContent: 'center' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
-                  <input type="checkbox" checked={fuForm.reminderEnabled} onChange={(e) => setFuForm({ ...fuForm, reminderEnabled: e.target.checked })} />
+                  <input type="checkbox" checked={fuForm.reminderEnabled} onChange={(e) => setFuField('reminderEnabled', e.target.checked)} />
                   Set reminder for next follow-up
                 </label>
-              </div>
+              </FormField>
             </div>
             <div style={{ marginTop: 16 }}>
               <button className="btn btn-primary" disabled={savingFu}>{savingFu ? 'Saving...' : 'Save / Confirm'}</button>

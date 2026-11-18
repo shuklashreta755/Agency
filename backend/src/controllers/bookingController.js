@@ -3,6 +3,7 @@ const { Booking, BookingInstallment, Project, Unit, User, Lead, PaymentPlan, Pay
 const { logActivity } = require('../utils/activityLogger');
 const { agentHasProjectAccess } = require('../utils/agentProjectAccess');
 const { notifyAgent } = require('../utils/notify');
+const { installmentAmount, advanceError, firstPlanPercentage } = require('../utils/installmentMoney');
 
 const bookingInclude = [
   { model: Project, as: 'project', attributes: ['id', 'name', 'city'] },
@@ -76,6 +77,12 @@ async function generateBookingInstallments(booking) {
   }
   if (!rows) rows = [{ name: 'Full Payment', milestone: 'On Booking', percentage: 100, activated: false, activatedDate: null }];
 
+  // Advance lives on the unit. Take it off this booking's first installment
+  // once. Each booking is generated as a single cycle, so sequence 1 is the
+  // only row that should be reduced.
+  const unitForAdvance = await Unit.findByPk(booking.unitId, { attributes: ['advanceAmount'] });
+  const advance = unitForAdvance ? Number(unitForAdvance.advanceAmount) || 0 : 0;
+
   const start = new Date(booking.bookingDate);
   await BookingInstallment.bulkCreate(rows.map((r, i) => {
     const sequenceNumber = i + 1;
@@ -92,7 +99,7 @@ async function generateBookingInstallments(booking) {
       name: r.name,
       milestone: r.milestone,
       percentage: r.percentage,
-      amount: Number(((sellingPriceOf(booking) * r.percentage) / 100).toFixed(2)),
+      amount: installmentAmount(sellingPriceOf(booking), r.percentage, sequenceNumber === 1, advance),
       dueDate,
       status,
     };
@@ -264,6 +271,9 @@ async function create(req, res) {
     }
     resolvedSellingPrice = parsed;
   }
+
+  const advErr = advanceError(resolvedSellingPrice, await firstPlanPercentage(validatedPlanId), unit.advanceAmount);
+  if (advErr) return res.status(400).json({ message: advErr });
 
   // Amount (Unit Price) is ALWAYS the unit's current total price, taken
   // server-side — never trusted from the client, so it can't be tampered

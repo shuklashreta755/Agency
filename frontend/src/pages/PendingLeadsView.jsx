@@ -5,6 +5,7 @@ import { initials } from '../components/icons';
 import { projectsResource } from '../store/resources';
 import { useDispatch } from 'react-redux';
 import api from '../api/axios';
+import FormField from '../components/FormField';
 import { getSocket } from '../api/socket';
 
 // Broker: "Pending Lead Requests" — view, Approve (assign/change Project +
@@ -21,6 +22,7 @@ export default function PendingLeadsView({ isAgent }) {
   const [actionRow, setActionRow] = useState(null); // { id, type: 'approve' | 'reject' }
   const [approveProjectId, setApproveProjectId] = useState('');
   const [rejectReason, setRejectReason] = useState('');
+  const [rejectError, setRejectError] = useState('');
   const [working, setWorking] = useState(false);
 
   const load = async () => {
@@ -60,8 +62,9 @@ export default function PendingLeadsView({ isAgent }) {
   const openReject = (lead) => {
     setActionRow({ id: lead.id, type: 'reject' });
     setRejectReason('');
+    setRejectError('');
   };
-  const closeAction = () => setActionRow(null);
+  const closeAction = () => { setActionRow(null); setRejectError(''); };
 
   const confirmApprove = async (lead) => {
     setWorking(true);
@@ -77,7 +80,11 @@ export default function PendingLeadsView({ isAgent }) {
   };
 
   const confirmReject = async (lead) => {
-    if (!rejectReason.trim()) return;
+    if (!rejectReason.trim()) {
+      setRejectError('Rejection reason is required.');
+      return;
+    }
+    setRejectError('');
     setWorking(true);
     try {
       await api.post(`/leads/${lead.id}/reject`, { reason: rejectReason.trim() });
@@ -142,10 +149,19 @@ export default function PendingLeadsView({ isAgent }) {
                   <tr>
                     <td colSpan={7}>
                       <div className="card" style={{ margin: '4px 0', boxShadow: 'none', background: 'var(--red-bg)' }}>
-                        <div className="form-field" style={{ marginBottom: 10 }}>
-                          <label>Rejection reason (required)</label>
-                          <input value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder="e.g. Duplicate of an existing customer" autoFocus />
-                        </div>
+                        <FormField label="Rejection reason" required error={rejectError} style={{ marginBottom: 10 }}>
+                          <input
+                            value={rejectReason}
+                            onChange={(e) => {
+                              const next = e.target.value;
+                              setRejectReason(next);
+                              setRejectError(next.trim() ? '' : 'Rejection reason is required.');
+                            }}
+                            onBlur={() => { if (!rejectReason.trim()) setRejectError('Rejection reason is required.'); }}
+                            placeholder="e.g. Duplicate of an existing customer"
+                            autoFocus
+                          />
+                        </FormField>
                         <button className="btn btn-primary" disabled={working || !rejectReason.trim()} onClick={() => confirmReject(l)}>{working ? 'Rejecting...' : 'Confirm Reject'}</button>{' '}
                         <button className="btn btn-ghost" onClick={closeAction}>Cancel</button>
                       </div>

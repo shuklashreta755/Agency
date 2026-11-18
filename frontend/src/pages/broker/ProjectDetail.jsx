@@ -6,7 +6,11 @@ import SearchableSelect from '../../components/SearchableSelect';
 import ProjectDocuments from '../../components/ProjectDocuments';
 import { Icons } from '../../components/icons';
 import api, { SERVER_ORIGIN } from '../../api/axios';
+import ConfirmDialog from '../../components/ConfirmDialog';
 import { UNIT_TYPES, UNIT_FEATURES } from '../../constants/unitEnums';
+import FormField from '../../components/FormField';
+import useFormValidation from '../../hooks/useFormValidation';
+import { required, positiveNumber, optionalPositiveNumber, nonNegativeNumber, isBlank } from '../../utils/validation';
 
 const TABS = [
   { key: 'overview', label: 'Overview' },
@@ -35,6 +39,11 @@ export default function ProjectDetail() {
   const [unitImages, setUnitImages] = useState([]);
   const [savingUnit, setSavingUnit] = useState(false);
 
+  const [customFeatures, setCustomFeatures] = useState([]);
+  const [customInput, setCustomInput] = useState('');
+  const [featureError, setFeatureError] = useState('');
+  const [addingFeature, setAddingFeature] = useState(false);
+
   const [showBulk, setShowBulk] = useState(false);
   const [bulkFeature, setBulkFeature] = useState(UNIT_FEATURES[0]);
   const [bulkPct, setBulkPct] = useState('');
@@ -54,6 +63,20 @@ export default function ProjectDetail() {
   const [activateDates, setActivateDates] = useState({});
   const [activatingKey, setActivatingKey] = useState(null);
   const [activateResult, setActivateResult] = useState({});
+  const [activateErrors, setActivateErrors] = useState({});
+  const [bulkError, setBulkError] = useState('');
+  const unitV = useFormValidation(unitForm, {
+    unitNo: required('Unit no.'),
+    totalPrice: positiveNumber('Total price'),
+    sizeSqft: optionalPositiveNumber('Size'),
+    advanceAmount: (val, all) => {
+      const nErr = nonNegativeNumber('Advance amount')(val);
+      if (nErr) return nErr;
+      if (isBlank(val) || isBlank(all.totalPrice)) return '';
+      if (Number(val) > Number(all.totalPrice)) return 'Advance cannot be more than total price.';
+      return '';
+    },
+  });
 
   const loadProject = async () => {
     const { data } = await api.get(`/projects/${id}`);
@@ -68,6 +91,19 @@ export default function ProjectDetail() {
     const { data } = await api.get(`/projects/${id}/payment-plans`);
     setPaymentPlans(data.data);
   };
+  const loadCustomFeatures = async () => {
+    try {
+      const { data } = await api.get('/unit-features');
+      setCustomFeatures(data.data || []);
+    } catch {
+      setCustomFeatures([]);
+    }
+  };
+
+  const customNames = customFeatures
+    .map((f) => f.name)
+    .filter((name) => !UNIT_FEATURES.some((preset) => preset.toLowerCase() === name.toLowerCase()));
+  const featureOptions = [...UNIT_FEATURES, ...customNames];
 
   useEffect(() => {
     setLoading(true);
@@ -75,18 +111,32 @@ export default function ProjectDetail() {
     // state and reload everything (including payment plans) fresh.
     setExpandedPlanId(null);
     setUnitForm(emptyUnit);
-    Promise.all([loadProject(), loadUnits(), loadPaymentPlans()]).finally(() => setLoading(false));
+    setCustomInput('');
+    setFeatureError('');
+    Promise.all([loadProject(), loadUnits(), loadPaymentPlans(), loadCustomFeatures()]).finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  const handleDeletePlan = async (plan) => {
-    if (!window.confirm(`Delete payment plan "${plan.name}"?`)) return;
-    try {
-      await api.delete(`/payment-plans/${plan.id}`);
-      await loadPaymentPlans();
-    } catch (err) {
-      window.alert(err.response?.data?.message || 'Could not delete payment plan.');
-    }
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
+  const closeDelete = () => {
+    if (deleting) return;
+    setPendingDelete(null);
+    setDeleteError('');
+  };
+
+  const handleDeletePlan = (plan) => {
+    setDeleteError('');
+    setPendingDelete({
+      title: 'Delete payment plan',
+      message: `Delete payment plan "${plan.name}"? This cannot be undone.`,
+      run: async () => {
+        await api.delete(`/payment-plans/${plan.id}`);
+        await loadPaymentPlans();
+      },
+    });
   };
 
   // Activating a specific installment (2nd onward) applies ONLY to bookings on
@@ -95,7 +145,10 @@ export default function ProjectDetail() {
   const handleActivateInstallment = async (plan, row) => {
     const key = `${plan.id}-${row.sequenceNumber}`;
     const date = activateDates[key];
-    if (!date) { window.alert('Please choose a date first.'); return; }
+    if (!date) {
+      setActivateErrors((e) => ({ ...e, [key]: 'Please choose a last payment date.' }));
+      return;
+    }
     setActivatingKey(key);
     try {
       const { data } = await api.post(`/payment-plans/${plan.id}/installments/${row.sequenceNumber}/activate`, { date });
@@ -113,17 +166,22 @@ export default function ProjectDetail() {
   // every installment row resets to Locked (except the 1st) and every booking
   // on the plan gets a brand-new schedule, starting again at the 1st.
   const [startingCycleId, setStartingCycleId] = useState(null);
-  const handleStartNextCycle = async (plan) => {
-    if (!window.confirm(`Start a new payment cycle for "${plan.name}"? This won't change any existing booking — only new bookings made on this plan from now on will follow the new 1st installment onward.`)) return;
-    setStartingCycleId(plan.id);
-    try {
-      await api.post(`/payment-plans/${plan.id}/next-cycle`);
-      await loadPaymentPlans();
-    } catch (err) {
-      window.alert(err.response?.data?.message || 'Could not start a new cycle.');
-    } finally {
-      setStartingCycleId(null);
-    }
+  const handleStartNextCycle = (plan) => {
+    setDeleteError('');
+    setPendingDelete({
+      title: 'Start new payment cycle',
+      confirmLabel: 'Start cycle',
+      message: `Start a new payment cycle for "${plan.name}"? This won't change any existing booking — only new bookings made on this plan from now on will follow the new 1st installment onward.`,
+      run: async () => {
+        setStartingCycleId(plan.id);
+        try {
+          await api.post(`/payment-plans/${plan.id}/next-cycle`);
+          await loadPaymentPlans();
+        } finally {
+          setStartingCycleId(null);
+        }
+      },
+    });
   };
 
   const toggleFeature = (f) => {
@@ -133,8 +191,56 @@ export default function ProjectDetail() {
     }));
   };
 
+  const addCustomFeature = async () => {
+    const name = customInput.trim();
+    if (!name) return;
+    setAddingFeature(true);
+    setFeatureError('');
+    try {
+      const { data } = await api.post('/unit-features', { name });
+      const saved = data.data;
+      if (!saved.preset && saved.id) {
+        setCustomFeatures((prev) => (
+          prev.some((f) => f.id === saved.id) ? prev : [...prev, saved].sort((a, b) => a.name.localeCompare(b.name))
+        ));
+      }
+      setUnitForm((prev) => {
+        const already = prev.features.some((f) => f.toLowerCase() === saved.name.toLowerCase());
+        return {
+          ...prev,
+          features: already
+            ? prev.features.map((f) => (f.toLowerCase() === saved.name.toLowerCase() ? saved.name : f))
+            : [...prev.features, saved.name],
+        };
+      });
+      setCustomInput('');
+    } catch (err) {
+      setFeatureError(err.response?.data?.message || 'Could not add that feature.');
+    } finally {
+      setAddingFeature(false);
+    }
+  };
+
+  const removeCustomFeature = async (feature) => {
+    if (!window.confirm(`Remove "${feature.name}" from the feature list? Units that already use it will keep it.`)) return;
+    try {
+      await api.delete(`/unit-features/${feature.id}`);
+      setCustomFeatures((prev) => prev.filter((f) => f.id !== feature.id));
+      setUnitForm((prev) => ({ ...prev, features: prev.features.filter((f) => f !== feature.name) }));
+      if (bulkFeature === feature.name) setBulkFeature(UNIT_FEATURES[0]);
+    } catch (err) {
+      window.alert(err.response?.data?.message || 'Could not remove that feature.');
+    }
+  };
+
+  const setUnitField = (key, val) => {
+    setUnitForm((f) => ({ ...f, [key]: val }));
+    unitV.touch(key);
+  };
+
   const handleAddUnit = async (e) => {
     e.preventDefault();
+    if (!unitV.validate()) return;
     setSavingUnit(true);
     try {
       const formData = new FormData();
@@ -146,21 +252,52 @@ export default function ProjectDetail() {
       await api.post(`/projects/${id}/units`, formData);
       setUnitForm(emptyUnit);
       setUnitImages([]);
+      setCustomInput('');
+      setFeatureError('');
+      unitV.reset();
       setShowUnitForm(false);
       await Promise.all([loadUnits(), loadProject()]);
+      await Promise.all([loadUnits(), loadProject(), loadCustomFeatures()]);
+    } catch (err) {
+      window.alert(err.response?.data?.message || 'Could not save unit.');
     } finally {
       setSavingUnit(false);
     }
   };
 
-  const handleDeleteUnit = async (unit) => {
-    if (!window.confirm(`Delete unit "${unit.unitNo}"? This cannot be undone.`)) return;
-    await api.delete(`/units/${unit.id}`);
-    await Promise.all([loadUnits(), loadProject()]);
+  const handleDeleteUnit = (unit) => {
+    setDeleteError('');
+    setPendingDelete({
+      title: 'Delete unit',
+      message: `Delete unit "${unit.unitNo}"? This cannot be undone.`,
+      run: async () => {
+        await api.delete(`/units/${unit.id}`);
+        await Promise.all([loadUnits(), loadProject()]);
+      },
+    });
+  };
+
+  const runDelete = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      await pendingDelete.run();
+      setPendingDelete(null);
+    } catch (err) {
+      setDeleteError(err.response?.data?.message || 'Could not delete.');
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const handleBulkPreview = async () => {
-    if (!bulkPct) return;
+    const n = Number(bulkPct);
+    if (bulkPct === '' || !Number.isFinite(n) || n === 0) {
+      setBulkError('Enter a non-zero percentage, e.g. 20 or -5.');
+      return;
+    }
+    setBulkError('');
     setBulkBusy(true);
     try {
       const { data } = await api.post(`/projects/${id}/units/bulk-price-preview`, { feature: bulkFeature, percentage: Number(bulkPct) });
@@ -179,6 +316,8 @@ export default function ProjectDetail() {
       setBulkPct('');
       setShowBulk(false);
       await loadUnits();
+    } catch (err) {
+      window.alert(err.response?.data?.message || 'Could not update prices.');
     } finally {
       setBulkBusy(false);
     }
@@ -213,7 +352,7 @@ export default function ProjectDetail() {
         <KpiCard label="Total Units" value={summary?.totalUnits ?? 0} icon={Icons.properties} color="#2f6fed" bg="var(--blue-100)" />
         <KpiCard label="Available Units" value={summary?.availableUnits ?? 0} icon={Icons.leads} color="#1fb579" bg="var(--green-bg)" />
         <KpiCard label="Sold Units" value={summary?.soldUnits ?? 0} icon={Icons.reports} color="#7c5cf0" bg="var(--purple-bg)" />
-        <KpiCard label="Booked / On Hold" value={summary?.bookedOrOnHoldUnits ?? 0} icon={Icons.history} color="#e8a13b" bg="var(--amber-bg)" />
+        <KpiCard label="Booked " value={summary?.bookedUnits ?? 0} icon={Icons.history} color="#e8a13b" bg="var(--amber-bg)" />
       </div>
 
       <div className="settings-tabs">
@@ -252,7 +391,7 @@ export default function ProjectDetail() {
             <div className="filters">
               <button className="btn btn-ghost" onClick={() => setShowBulk(!showBulk)}>Bulk Price Update</button>
             </div>
-            <button className="btn btn-primary" onClick={() => setShowUnitForm(!showUnitForm)}>{showUnitForm ? 'Cancel' : '+ Add Unit'}</button>
+            <button className="btn btn-primary" onClick={() => { if (showUnitForm) { setShowUnitForm(false); unitV.reset(); setUnitForm(emptyUnit); } else setShowUnitForm(true); }}>{showUnitForm ? 'Cancel' : '+ Add Unit'}</button>
           </div>
 
           {showBulk && (
@@ -260,14 +399,20 @@ export default function ProjectDetail() {
               <div className="card-title" style={{ marginBottom: 6 }}>Bulk Price Update</div>
               <p className="cell-sub" style={{ marginBottom: 14 }}>Every unit with the selected feature will have its Basic &amp; Total Price adjusted by the given percentage.</p>
               <div className="form-grid">
-                <div className="form-field"><label>Unit Feature</label>
+                <FormField label="Unit Feature">
                   <select value={bulkFeature} onChange={(e) => { setBulkFeature(e.target.value); setBulkPreview(null); }}>
-                    {UNIT_FEATURES.map((f) => <option key={f} value={f}>{f}</option>)}
+                    {featureOptions.map((f) => <option key={f} value={f}>{f}</option>)}
                   </select>
-                </div>
-                <div className="form-field"><label>Increase / Decrease Percentage</label>
-                  <input type="number" step="any" placeholder="e.g. 20 or -5" value={bulkPct} onChange={(e) => { setBulkPct(e.target.value); setBulkPreview(null); }} />
-                </div>
+                </FormField>
+                <FormField label="Increase / Decrease Percentage" required error={bulkError}>
+                  <input type="number" step="any" placeholder="e.g. 20 or -5" value={bulkPct} onChange={(e) => {
+                    const next = e.target.value;
+                    setBulkPct(next);
+                    setBulkPreview(null);
+                    const n = Number(next);
+                    setBulkError(next === '' || !Number.isFinite(n) || n === 0 ? 'Enter a non-zero percentage, e.g. 20 or -5.' : '');
+                  }} />
+                </FormField>
               </div>
               <div style={{ marginTop: 14 }}>
                 <button className="btn btn-ghost" onClick={handleBulkPreview} disabled={bulkBusy || !bulkPct}>Preview</button>{' '}
@@ -297,49 +442,105 @@ export default function ProjectDetail() {
           {showUnitForm && (
             <div className="card" style={{ marginBottom: 20 }}>
               <div className="card-title" style={{ marginBottom: 16 }}>New Unit</div>
-              <form onSubmit={handleAddUnit}>
+              <form onSubmit={handleAddUnit} noValidate>
                 <div className="form-grid">
-                  <div className="form-field"><label>Unit No.</label><input required value={unitForm.unitNo} onChange={(e) => setUnitForm({ ...unitForm, unitNo: e.target.value })} /></div>
-                  <div className="form-field"><label>Unit Type</label>
-                    <select value={unitForm.unitType} onChange={(e) => setUnitForm({ ...unitForm, unitType: e.target.value })}>
+                  <FormField label="Unit No." required error={unitV.show('unitNo')}>
+                    <input value={unitForm.unitNo} onChange={(e) => setUnitField('unitNo', e.target.value)} onBlur={() => unitV.touch('unitNo')} />
+                  </FormField>
+                  <FormField label="Unit Type">
+                    <select value={unitForm.unitType} onChange={(e) => setUnitField('unitType', e.target.value)}>
                       {UNIT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                     </select>
-                  </div>
-                  <div className="form-field"><label>Size (Sq.Ft.)</label><input type="number" value={unitForm.sizeSqft} onChange={(e) => setUnitForm({ ...unitForm, sizeSqft: e.target.value })} /></div>
-                  <div className="form-field"><label>Payment Plan</label>
+                  </FormField>
+                  <FormField label="Size (Sq.Ft.)" error={unitV.show('sizeSqft')}>
+                    <input type="number" value={unitForm.sizeSqft} onChange={(e) => setUnitField('sizeSqft', e.target.value)} onBlur={() => unitV.touch('sizeSqft')} />
+                  </FormField>
+                  <FormField label="Payment Plan">
                     <SearchableSelect
                       variant="form"
                       placeholder="Full Payment (no installments)"
                       value={unitForm.paymentPlanId}
-                      onChange={(val) => setUnitForm({ ...unitForm, paymentPlanId: val })}
+                      onChange={(val) => setUnitField('paymentPlanId', val)}
                       options={paymentPlans.map((p) => ({ value: p.id, label: p.name }))}
                     />
-                  </div>
-                  <div className="form-field"><label>Total Price (₹)</label><input required type="number" value={unitForm.totalPrice} onChange={(e) => setUnitForm({ ...unitForm, totalPrice: e.target.value })} /></div>
-                  <div className="form-field"><label>Advance Amount (₹)</label><input type="number" value={unitForm.advanceAmount} onChange={(e) => setUnitForm({ ...unitForm, advanceAmount: e.target.value })} /></div>
+                  </FormField>
+                  <FormField label="Total Price (₹)" required error={unitV.show('totalPrice')}>
+                    <input type="number" value={unitForm.totalPrice} onChange={(e) => setUnitField('totalPrice', e.target.value)} onBlur={() => unitV.touch('totalPrice')} />
+                  </FormField>
+                  <FormField
+                    label="Advance Amount (₹)"
+                    error={unitV.show('advanceAmount')}
+                    hint={!unitV.show('advanceAmount') ? 'Deducted from the first installment.' : undefined}
+                  >
+                    <input type="number" min="0" value={unitForm.advanceAmount} onChange={(e) => setUnitField('advanceAmount', e.target.value)} onBlur={() => unitV.touch('advanceAmount')} />
+                  </FormField>
                   {unitForm.paymentPlanId && (
                     <div className="form-field" style={{ gridColumn: '1 / -1' }}>
                       <label>Plan Schedule Preview</label>
                       <div className="table-wrap">
                         <table>
-                          <thead><tr><th>Installment</th><th>Milestone / Due Condition</th><th>Percentage</th></tr></thead>
+                          <thead><tr><th>Installment</th><th>Milestone / Due Condition</th><th>Percentage</th><th>Amount</th></tr></thead>
                           <tbody>
-                            {(paymentPlans.find((p) => p.id === unitForm.paymentPlanId)?.installments || []).map((r) => (
-                              <tr key={r.id}><td className="cell-main">{r.name}</td><td className="cell-sub">{r.milestone}</td><td>{r.percentage}%</td></tr>
-                            ))}
+                            {(paymentPlans.find((p) => String(p.id) === String(unitForm.paymentPlanId))?.installments || [])
+                              .slice()
+                              .sort((a, b) => Number(a.sequenceNumber) - Number(b.sequenceNumber))
+                              .map((r, i) => {
+                              const gross = (Number(unitForm.totalPrice) * Number(r.percentage)) / 100;
+                              const net = i === 0 ? Math.max(0, gross - (Number(unitForm.advanceAmount) || 0)) : gross;
+                              return (
+                                <tr key={r.id}>
+                                  <td className="cell-main">{r.name}</td>
+                                  <td className="cell-sub">{r.milestone}</td>
+                                  <td>{r.percentage}%</td>
+                                  <td>{unitForm.totalPrice ? fmt(net) : '—'}</td>
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
                     </div>
                   )}
-                  <div className="form-field" style={{ gridColumn: '1 / -1' }}><label>Description</label><input value={unitForm.description} onChange={(e) => setUnitForm({ ...unitForm, description: e.target.value })} /></div>
+                  <FormField label="Description" style={{ gridColumn: '1 / -1' }}>
+                    <input value={unitForm.description} onChange={(e) => setUnitField('description', e.target.value)} />
+                  </FormField>
                   <div className="form-field" style={{ gridColumn: '1 / -1' }}>
                     <label>Unit Features</label>
                     <div className="chip-row">
-                      {UNIT_FEATURES.map((f) => (
-                        <span key={f} className={`chip ${unitForm.features.includes(f) ? 'active' : ''}`} onClick={() => toggleFeature(f)}>{f}</span>
-                      ))}
+                      {featureOptions.map((f) => {
+                        const custom = customFeatures.find((c) => c.name === f);
+                        return (
+                          <span key={f} className={`chip ${unitForm.features.includes(f) ? 'active' : ''}`} onClick={() => toggleFeature(f)}>
+                            {f}
+                            {custom && (
+                              <button
+                                type="button"
+                                className="chip-remove"
+                                title="Remove from list"
+                                onClick={(e) => { e.stopPropagation(); removeCustomFeature(custom); }}
+                              >
+                                ×
+                              </button>
+                            )}
+                          </span>
+                        );
+                      })}
                     </div>
+                    <div className="feature-add-row">
+                      <input
+                        value={customInput}
+                        placeholder="Add custom feature, e.g. Sea Facing"
+                        maxLength={40}
+                        onChange={(e) => { setCustomInput(e.target.value); setFeatureError(''); }}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCustomFeature(); } }}
+                      />
+                      <button type="button" className="btn btn-ghost" onClick={addCustomFeature} disabled={addingFeature || !customInput.trim()}>
+                        {addingFeature ? 'Adding...' : 'Add'}
+                      </button>
+                    </div>
+                    {featureError
+                      ? <div className="feature-error">{featureError}</div>
+                      : <div className="feature-hint">Custom features are saved for this brokerage and show up on every unit.</div>}
                   </div>
                   <div className="form-field" style={{ gridColumn: '1 / -1' }}>
                     <label>Unit Images</label>
@@ -348,7 +549,7 @@ export default function ProjectDetail() {
                 </div>
                 <div style={{ marginTop: 16 }}>
                   <button className="btn btn-primary" disabled={savingUnit}>{savingUnit ? 'Saving...' : 'Save Unit'}</button>{' '}
-                  <button type="button" className="btn btn-ghost" onClick={() => setShowUnitForm(false)}>Cancel</button>
+                  <button type="button" className="btn btn-ghost" onClick={() => { setShowUnitForm(false); unitV.reset(); setUnitForm(emptyUnit); }}>Cancel</button>
                 </div>
               </form>
             </div>
@@ -462,10 +663,15 @@ export default function ProjectDetail() {
                                           <td>
                                             <input
                                               type="date"
-                                              style={{ padding: '6px 8px', fontSize: 12.5 }}
+                                              style={{ padding: '6px 8px', fontSize: 12.5, borderColor: activateErrors[key] ? 'var(--red)' : undefined }}
                                               value={activateDates[key] || ''}
-                                              onChange={(e) => setActivateDates((d) => ({ ...d, [key]: e.target.value }))}
+                                              onChange={(e) => {
+                                                const next = e.target.value;
+                                                setActivateDates((d) => ({ ...d, [key]: next }));
+                                                setActivateErrors((err) => ({ ...err, [key]: next ? '' : 'Please choose a last payment date.' }));
+                                              }}
                                             />
+                                            {activateErrors[key] && <div className="field-error">{activateErrors[key]}</div>}
                                           </td>
                                           <td>
                                             <button
@@ -521,6 +727,18 @@ export default function ProjectDetail() {
           <div className="card-title" style={{ marginBottom: 16 }}>Documents</div>
           <ProjectDocuments projectId={project.id} pendingFiles={[]} onPendingFilesChange={() => {}} />
         </div>
+      )}
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title={pendingDelete.title}
+          message={pendingDelete.message}
+          confirmLabel={pendingDelete.confirmLabel}
+          busy={deleting}
+          error={deleteError}
+          onConfirm={runDelete}
+          onCancel={closeDelete}
+        />
       )}
     </>
   );

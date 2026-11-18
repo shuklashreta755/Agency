@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import api, { SERVER_ORIGIN } from '../api/axios';
+import ConfirmDialog from './ConfirmDialog';
 
 const ACCEPTED_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx'];
 const ACCEPTED_ATTR = '.pdf,.jpg,.jpeg,.png,.doc,.docx';
@@ -97,13 +98,27 @@ export default function ProjectDocuments({ projectId, pendingFiles = [], onPendi
 
   const removePending = (idx) => onPendingFilesChange(pendingFiles.filter((_, i) => i !== idx));
 
-  const removeUploaded = async (doc) => {
-    if (!window.confirm(`Delete "${doc.name}"? This can't be undone.`)) return;
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
+  const removeUploaded = (doc) => {
+    setDeleteError('');
+    setPendingDelete(doc);
+  };
+
+  const runDelete = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    setDeleteError('');
     try {
-      await api.delete(`/attachments/${doc.id}`);
-      setDocuments((prev) => prev.filter((d) => d.id !== doc.id));
+      await api.delete(`/attachments/${pendingDelete.id}`);
+      setDocuments((prev) => prev.filter((d) => d.id !== pendingDelete.id));
+      setPendingDelete(null);
     } catch (e) {
-      window.alert(e.response?.data?.message || 'Could not delete document.');
+      setDeleteError(e.response?.data?.message || 'Could not delete document.');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -192,6 +207,17 @@ export default function ProjectDocuments({ projectId, pendingFiles = [], onPendi
       </div>
 
       {error && <div className="pdoc-note">{error}</div>}
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Delete document"
+          message={`Delete "${pendingDelete.name}"? This can't be undone.`}
+          busy={deleting}
+          error={deleteError}
+          onConfirm={runDelete}
+          onCancel={() => { if (!deleting) { setPendingDelete(null); setDeleteError(''); } }}
+        />
+      )}
 
       {!readOnly && (
         <p className="cell-sub pdoc-footnote">

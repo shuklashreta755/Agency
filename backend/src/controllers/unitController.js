@@ -1,7 +1,8 @@
 const { Op } = require('sequelize');
 const { Unit, UnitImage, Installment, Project, PaymentPlan, PaymentPlanInstallment } = require('../models');
-const { UNIT_FEATURES } = require('../constants/unitEnums');
+const { rememberFeatures } = require('./unitFeatureController');
 const { logActivity } = require('../utils/activityLogger');
+const { installmentAmount, advanceError, firstPlanPercentage } = require('../utils/installmentMoney');
 
 const unitInclude = [
   { model: UnitImage, as: 'images' },
@@ -17,6 +18,8 @@ const unitInclude = [
 //   installment, due immediately — the same default this app has always had.
 // Due dates are spaced 30 days apart starting today, since a plan's rows only
 // define a milestone/condition (e.g. "On Booking"), not a calendar date.
+// The first installment's amount is the plan percentage minus this unit's
+// advance (see installmentAmount). Later rows are not reduced.
 async function generateInstallments(unit) {
   await Installment.destroy({ where: { unitId: unit.id } });
 
@@ -42,17 +45,17 @@ async function generateInstallments(unit) {
       milestone: r.milestone,
       dueDate: dueDate.toISOString().slice(0, 10),
       percentage: r.percentage,
-      amount: Number(((Number(unit.totalPrice) * r.percentage) / 100).toFixed(2)),
+      amount: installmentAmount(unit.totalPrice, r.percentage, i === 0, unit.advanceAmount),
     };
   }));
 }
 
-// Recomputes each installment's `amount` from the unit's current totalPrice,
-// keeping each installment's percentage (and status) unchanged.
+// Recomputes each installment's `amount` from the unit's current totalPrice.
+// Percentage and status stay as they are. Installment 1 is still net of advance.
 async function recalculateInstallmentAmounts(unit) {
   const installments = await Installment.findAll({ where: { unitId: unit.id } });
   await Promise.all(installments.map((inst) => inst.update({
-    amount: Number(((Number(unit.totalPrice) * Number(inst.percentage)) / 100).toFixed(2)),
+    amount: installmentAmount(unit.totalPrice, inst.percentage, inst.installmentNumber === 1, unit.advanceAmount),
   })));
 }
 
@@ -115,9 +118,9 @@ async function create(req, res) {
     return res.status(400).json({ message: 'Unit No., Unit Type and Total Price are required.' });
   }
 
-  const featureList = Array.isArray(features) ? features : (features ? [features] : []);
-  const invalidFeatures = featureList.filter((f) => !UNIT_FEATURES.includes(f));
-  if (invalidFeatures.length) return res.status(400).json({ message: `Unknown feature(s): ${invalidFeatures.join(', ')}` });
+  const remembered = await rememberFeatures(features, req.brokerId);
+  if (remembered.error) return res.status(400).json({ message: remembered.error });
+  const featureList = remembered.features;
 
   // A unit's payment plan must belong to its own project — never another
   // project's plan, and never a hardcoded/free-typed value.
@@ -128,12 +131,16 @@ async function create(req, res) {
     validatedPlanId = plan.id;
   }
 
+  const advance = advanceAmount === undefined || advanceAmount === null || advanceAmount === '' ? 0 : Number(advanceAmount);
+  const advErr = advanceError(totalPrice, await firstPlanPercentage(validatedPlanId), advance);
+  if (advErr) return res.status(400).json({ message: advErr });
+
   const unit = await Unit.create({
     projectId: project.id, brokerId: req.brokerId, unitNo, unitType, features: featureList,
     // Basic Price is no longer collected on the Add Unit form — it defaults to
     // Total Price and can be fine-tuned afterward via the unit's Pricing edit or
     // Bulk Price Update, both of which still manage it as a distinct value.
-    sizeSqft, basicPrice: basicPrice || totalPrice, totalPrice, advanceAmount: advanceAmount || 0,
+    sizeSqft, basicPrice: basicPrice || totalPrice, totalPrice, advanceAmount: advance,
     paymentPlanId: validatedPlanId, description, status: status || 'Available',
   });
 
@@ -159,10 +166,11 @@ async function update(req, res) {
   if (!unit) return res.status(404).json({ message: 'Unit not found.' });
 
   const { unitNo, unitType, features, sizeSqft, paymentPlanId, description, status } = req.body;
+  let featureList;
   if (features !== undefined) {
-    const featureList = Array.isArray(features) ? features : [features];
-    const invalidFeatures = featureList.filter((f) => !UNIT_FEATURES.includes(f));
-    if (invalidFeatures.length) return res.status(400).json({ message: `Unknown feature(s): ${invalidFeatures.join(', ')}` });
+    const remembered = await rememberFeatures(features, req.brokerId);
+    if (remembered.error) return res.status(400).json({ message: remembered.error });
+    featureList = remembered.features;
   }
 
   let validatedPlanId;
@@ -174,13 +182,15 @@ async function update(req, res) {
       if (!plan) return res.status(400).json({ message: 'That payment plan does not belong to this project.' });
       validatedPlanId = plan.id;
     }
+    const advErr = advanceError(unit.totalPrice, await firstPlanPercentage(validatedPlanId), unit.advanceAmount);
+    if (advErr) return res.status(400).json({ message: advErr });
   }
 
   const prevPlanId = unit.paymentPlanId;
   await unit.update({
     ...(unitNo !== undefined && { unitNo }),
     ...(unitType !== undefined && { unitType }),
-    ...(features !== undefined && { features: Array.isArray(features) ? features : [features] }),
+    ...(features !== undefined && { features: featureList }),
     ...(sizeSqft !== undefined && { sizeSqft }),
     ...(paymentPlanId !== undefined && { paymentPlanId: validatedPlanId }),
     ...(description !== undefined && { description }),
@@ -214,14 +224,19 @@ async function updatePricing(req, res) {
 
   const { basicPrice, totalPrice, advanceAmount } = req.body;
   const prevTotal = Number(unit.totalPrice);
+  const prevAdvance = Number(unit.advanceAmount);
+  const nextTotal = totalPrice !== undefined ? Number(totalPrice) : prevTotal;
+  const nextAdvance = advanceAmount !== undefined && advanceAmount !== '' ? Number(advanceAmount) : prevAdvance;
+  const advErr = advanceError(nextTotal, await firstPlanPercentage(unit.paymentPlanId), nextAdvance);
+  if (advErr) return res.status(400).json({ message: advErr });
 
   await unit.update({
     ...(basicPrice !== undefined && { basicPrice }),
     ...(totalPrice !== undefined && { totalPrice }),
-    ...(advanceAmount !== undefined && { advanceAmount }),
+    ...(advanceAmount !== undefined && { advanceAmount: nextAdvance }),
   });
 
-  if (totalPrice !== undefined && Number(totalPrice) !== prevTotal) {
+  if (nextTotal !== prevTotal || nextAdvance !== prevAdvance) {
     await recalculateInstallmentAmounts(unit);
   }
 
@@ -273,12 +288,23 @@ async function bulkPriceApply(req, res) {
   const { feature, percentage } = req.body;
   if (!feature || percentage === undefined) return res.status(400).json({ message: 'A feature and a percentage are required.' });
 
-  const units = await Unit.findAll({ where: { projectId: project.id, features: { [Op.contains]: [feature] } } });
+  const units = await Unit.findAll({
+    where: { projectId: project.id, features: { [Op.contains]: [feature] } },
+    include: [{ model: Installment, as: 'installments' }],
+  });
   const pct = Number(percentage);
 
-  for (const unit of units) {
-    const newBasic = Number((Number(unit.basicPrice) * (1 + pct / 100)).toFixed(2));
+  const priced = units.map((unit) => {
     const newTotal = Number((Number(unit.totalPrice) * (1 + pct / 100)).toFixed(2));
+    const first = (unit.installments || []).find((inst) => inst.installmentNumber === 1);
+    const err = first ? advanceError(newTotal, first.percentage, unit.advanceAmount) : null;
+    return { unit, newTotal, err };
+  });
+  const blocked = priced.find((row) => row.err);
+  if (blocked) return res.status(400).json({ message: `Unit "${blocked.unit.unitNo}": ${blocked.err}` });
+
+  for (const { unit, newTotal } of priced) {
+    const newBasic = Number((Number(unit.basicPrice) * (1 + pct / 100)).toFixed(2));
     await unit.update({ basicPrice: newBasic, totalPrice: newTotal });
     await recalculateInstallmentAmounts(unit);
   }

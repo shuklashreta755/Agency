@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import Badge from '../components/Badge';
 import ActivityResponses from '../components/ActivityResponses';
 import LeadResponseModal from '../components/LeadResponseModal';
+import ConfirmDialog from '../components/ConfirmDialog';
 import { initials } from '../components/icons';
 import { leadsResource, agentsResource, projectsResource } from '../store/resources';
 import SearchableSelect from '../components/SearchableSelect';
@@ -12,6 +13,9 @@ import PreferredLocationsField from '../components/PreferredLocationsField';
 import PendingLeadsView from './PendingLeadsView';
 import api from '../api/axios';
 import { LEAD_STAGES } from '../constants/leadEnums';
+import FormField from '../components/FormField';
+import useFormValidation from '../hooks/useFormValidation';
+import { personName, requiredPhone, phone, email, required } from '../utils/validation';
 
 const emptyLead = {
   customerName: '', phone: '', alternatePhone: '', email: '', source: 'Website', priority: 'Medium', projectId: '', agentId: '',
@@ -28,6 +32,14 @@ export default function LeadsView({ isAgent }) {
 
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyLead);
+  const v = useFormValidation(form, {
+    customerName: personName('Customer name'),
+    phone: requiredPhone('Phone'),
+    alternatePhone: phone,
+    email,
+    source: required('Source'),
+    priority: required('Priority'),
+  });
   const [stageFilter, setStageFilter] = useState('');
   // "Assigned Leads" (default) / "Unassigned Leads" / — Broker only — "Pending
   // Leads" (Lead Approval Workflow requests, moved here from its own sidebar
@@ -109,8 +121,21 @@ export default function LeadsView({ isAgent }) {
 
   const canEdit = (lead) => !isAgent || (lead.createdBy === user?.id && lead.createdByRole === 'agent');
 
+  const setField = (key, val) => {
+    setForm((f) => ({ ...f, [key]: val }));
+    v.touch(key);
+  };
+
+  const closeLeadForm = () => {
+    setShowForm(false);
+    setDuplicateLead(null);
+    setForm(emptyLead);
+    v.reset();
+  };
+
   const handleCreate = async (e) => {
     e.preventDefault();
+    if (!v.validate()) return;
     const payload = { ...form };
     if (!payload.agentId) delete payload.agentId;
     if (!payload.projectId) delete payload.projectId;
@@ -140,8 +165,7 @@ export default function LeadsView({ isAgent }) {
       setSubmitting(true);
       try {
         await api.post('/leads', payload);
-        setForm(emptyLead);
-        setShowForm(false);
+        closeLeadForm();
         setPendingSubmitted({ customerName: payload.customerName });
       } catch (err) {
         if (err.response?.status === 409 && err.response?.data?.existingLead) {
@@ -160,17 +184,34 @@ export default function LeadsView({ isAgent }) {
     // 409 rejection message comes straight from the backend.
     try {
       await dispatch(leadsResource.createOne(payload)).unwrap();
-      setForm(emptyLead);
-      setShowForm(false);
+      closeLeadForm();
     } catch (err) {
       window.alert(typeof err === 'string' ? err : 'Could not save lead.');
     }
   };
 
-  const handleDelete = async (lead) => {
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
+  const handleDelete = (lead) => {
     if (!canEdit(lead)) return;
-    if (!window.confirm(`Delete lead "${lead.customerName}"? This cannot be undone.`)) return;
-    await dispatch(leadsResource.removeOne(lead.id));
+    setDeleteError('');
+    setPendingDelete(lead);
+  };
+
+  const runDelete = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      await dispatch(leadsResource.removeOne(pendingDelete.id)).unwrap();
+      setPendingDelete(null);
+    } catch (err) {
+      setDeleteError(typeof err === 'string' ? err : 'Could not delete lead.');
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const toggleSelect = (id) => {
@@ -278,7 +319,7 @@ export default function LeadsView({ isAgent }) {
             </>
           )}
           {!(isAgent && leadsTab === 'unassigned') && (
-            <button className="btn btn-primary" onClick={() => { setShowForm(!showForm); setDuplicateLead(null); }}>+ Add Lead</button>
+            <button className="btn btn-primary" onClick={() => { if (showForm) closeLeadForm(); else { setShowForm(true); setDuplicateLead(null); v.reset(); } }}>+ Add Lead</button>
           )}
         </div>
       </div>
@@ -356,51 +397,63 @@ export default function LeadsView({ isAgent }) {
             </div>
           )}
 
-          <form onSubmit={handleCreate}>
+          <form onSubmit={handleCreate} noValidate>
             <div className="form-grid">
-              <div className="form-field"><label>Customer Name</label><input required value={form.customerName} onChange={(e) => setForm({ ...form, customerName: e.target.value })} /></div>
-              <div className="form-field"><label>Phone</label><input required value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></div>
+              <FormField label="Customer Name" required error={v.show('customerName')}>
+                <input value={form.customerName} onChange={(e) => setField('customerName', e.target.value)} onBlur={() => v.touch('customerName')} />
+              </FormField>
+              <FormField label="Phone" required error={v.show('phone')}>
+                <input value={form.phone} onChange={(e) => setField('phone', e.target.value)} onBlur={() => v.touch('phone')} placeholder="+91 98200 12345" />
+              </FormField>
               {isAgent && (
-                <div className="form-field"><label>Alternate Phone (optional)</label><input value={form.alternatePhone} onChange={(e) => setForm({ ...form, alternatePhone: e.target.value })} /></div>
+                <FormField label="Alternate Phone (optional)" error={v.show('alternatePhone')}>
+                  <input value={form.alternatePhone} onChange={(e) => setField('alternatePhone', e.target.value)} onBlur={() => v.touch('alternatePhone')} placeholder="+91 98200 12345" />
+                </FormField>
               )}
-              <div className="form-field"><label>Email</label><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></div>
-              <div className="form-field"><label>Project{isAgent ? ' (optional — Unassigned allowed)' : ''}</label>
+              <FormField label="Email" error={v.show('email')}>
+                <input type="email" value={form.email} onChange={(e) => setField('email', e.target.value)} onBlur={() => v.touch('email')} />
+              </FormField>
+              <FormField label={isAgent ? 'Project (optional — Unassigned allowed)' : 'Project'}>
                 <SearchableSelect
                   variant="form"
                   placeholder={isAgent ? 'Unassigned' : 'Select project'}
                   value={form.projectId}
-                  onChange={(val) => setForm({ ...form, projectId: val })}
+                  onChange={(val) => setField('projectId', val)}
                   options={projects.map((p) => ({ value: p.id, label: p.name }))}
                 />
-              </div>
-              <div className="form-field"><label>Source</label>
+              </FormField>
+              <FormField label="Source" required error={v.show('source')}>
                 <SearchableSelect
                   variant="form"
                   placeholder="Select source"
                   value={form.source}
-                  onChange={(val) => setForm({ ...form, source: val || 'Website' })}
+                  invalid={!!v.show('source')}
+                  onBlur={() => v.touch('source')}
+                  onChange={(val) => setField('source', val || 'Website')}
                   options={formEnums.sources.map((s) => ({ value: s, label: s }))}
                 />
-              </div>
-              <div className="form-field"><label>Priority</label>
+              </FormField>
+              <FormField label="Priority" required error={v.show('priority')}>
                 <SearchableSelect
                   variant="form"
                   placeholder="Select priority"
                   value={form.priority}
-                  onChange={(val) => setForm({ ...form, priority: val || 'Medium' })}
+                  invalid={!!v.show('priority')}
+                  onBlur={() => v.touch('priority')}
+                  onChange={(val) => setField('priority', val || 'Medium')}
                   options={formEnums.priorities.map((p) => ({ value: p, label: p }))}
                 />
-              </div>
+              </FormField>
               {!isAgent && (
-                <div className="form-field"><label>Assign Agent (optional)</label>
+                <FormField label="Assign Agent (optional)">
                   <SearchableSelect
                     variant="form"
                     placeholder="Unassigned"
                     value={form.agentId}
-                    onChange={(val) => setForm({ ...form, agentId: val })}
+                    onChange={(val) => setField('agentId', val)}
                     options={agents.map((a) => ({ value: a.id, label: a.name }))}
                   />
-                </div>
+                </FormField>
               )}
             </div>
 
@@ -428,7 +481,7 @@ export default function LeadsView({ isAgent }) {
 
             <div style={{ marginTop: 16 }}>
               <button className="btn btn-primary" disabled={submitting}>{submitting ? 'Submitting...' : 'Save Lead'}</button>{' '}
-              <button type="button" className="btn btn-ghost" onClick={() => { setShowForm(false); setDuplicateLead(null); }}>Cancel</button>
+              <button type="button" className="btn btn-ghost" onClick={closeLeadForm}>Cancel</button>
             </div>
           </form>
         </div>
@@ -506,6 +559,17 @@ export default function LeadsView({ isAgent }) {
 
       {responseModalLeadId && (
         <LeadResponseModal leadId={responseModalLeadId} onClose={() => setResponseModalLeadId(null)} />
+      )}
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Delete lead"
+          message={`Delete lead "${pendingDelete.customerName}"? This cannot be undone.`}
+          busy={deleting}
+          error={deleteError}
+          onConfirm={runDelete}
+          onCancel={() => { if (!deleting) { setPendingDelete(null); setDeleteError(''); } }}
+        />
       )}
     </>
   );

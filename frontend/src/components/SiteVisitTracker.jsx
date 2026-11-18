@@ -3,6 +3,7 @@ import api, { SERVER_ORIGIN } from '../api/axios';
 import { getCurrentPosition } from '../utils/geo';
 import { SITE_VISIT_STEPS, SITE_VISIT_LOCATION_OPTIONAL_STEPS } from '../constants/leadEnums';
 import GeoTaggedPhotoCapture from './GeoTaggedPhotoCapture';
+import FormField from './FormField';
 
 const FEEDBACK_STEP = 'Visit Feedback Added';
 
@@ -24,6 +25,8 @@ function SiteVisitTrackerPanel({ leadId, tracker, completedSteps, isAgent, canAd
   const [photoCapture, setPhotoCapture] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [stepError, setStepError] = useState('');
+  const [photoError, setPhotoError] = useState('');
 
   const activeIndex = tracker.currentStepIndex;
   const isComplete = tracker.status === 'completed';
@@ -35,14 +38,16 @@ function SiteVisitTrackerPanel({ leadId, tracker, completedSteps, isAgent, canAd
   const handleSave = async (e) => {
     e.preventDefault();
     setError('');
+    setStepError('');
+    setPhotoError('');
     // The feedback step has its own dedicated text field instead of the
     // "type the step name to confirm" pattern used by every other step.
     if (!isFeedbackStep && !stepInput.trim()) {
-      setError(`Please type "${activeStepName}" to confirm this step.`);
+      setStepError(`Please type "${activeStepName}" to confirm this step.`);
       return;
     }
     if (activeStepName === 'Photo Uploaded' && !photoFile) {
-      setError('A photo is required before continuing — please attach one.');
+      setPhotoError('A photo is required before continuing — please attach one.');
       return;
     }
     setSaving(true);
@@ -127,40 +132,53 @@ function SiteVisitTrackerPanel({ leadId, tracker, completedSteps, isAgent, canAd
       </div>
 
       {!isComplete && isAgent && canAdvance && (
-        <form onSubmit={handleSave} style={{ marginTop: 18, paddingTop: 18, borderTop: '1px solid var(--border)' }}>
+        <form onSubmit={handleSave} noValidate style={{ marginTop: 18, paddingTop: 18, borderTop: '1px solid var(--border)' }}>
           {error && <div className="auth-error" style={{ marginBottom: 12 }}>{error}</div>}
           {isFeedbackStep ? (
-            <div className="form-field">
-              <label>Feedback (optional)</label>
+            <FormField label="Feedback (optional)">
               <textarea
                 rows={3}
                 value={feedbackText}
                 onChange={(e) => setFeedbackText(e.target.value)}
                 placeholder="Enter feedback from the site visit..."
               />
-            </div>
+            </FormField>
           ) : (
-            <div className="form-field">
-              <label>Current Step:</label>
+            <FormField
+              label="Current Step:"
+              required
+              error={stepError}
+              hint={!stepError && activeStepLocationOptional ? 'Location is optional for this step.' : undefined}
+            >
               <input
                 value={stepInput}
-                onChange={(e) => setStepInput(e.target.value)}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setStepInput(next);
+                  setStepError(next.trim() ? '' : `Please type "${activeStepName}" to confirm this step.`);
+                }}
+                onBlur={() => { if (!stepInput.trim()) setStepError(`Please type "${activeStepName}" to confirm this step.`); }}
                 placeholder={activeStepName}
               />
-              {activeStepLocationOptional && (
-                <div className="cell-sub" style={{ marginTop: 4 }}>Location is optional for this step.</div>
-              )}
-            </div>
+            </FormField>
           )}
           {activeStepName === 'Photo Uploaded' && (
-            <div className="form-field" style={{ marginTop: 10 }}>
-              <label>Photo (required) — captured live, geotagged with your current location and the date/time</label>
+            <FormField
+              label="Photo — captured live, geotagged with your current location and the date/time"
+              required
+              error={photoError}
+              style={{ marginTop: 10 }}
+            >
               <GeoTaggedPhotoCapture
                 value={photoCapture}
-                onChange={(next) => { setPhotoCapture(next); setPhotoFile(next?.file || null); }}
+                onChange={(next) => {
+                  setPhotoCapture(next);
+                  setPhotoFile(next?.file || null);
+                  setPhotoError(next?.file ? '' : 'A photo is required before continuing — please attach one.');
+                }}
                 disabled={saving}
               />
-            </div>
+            </FormField>
           )}
           <div style={{ marginTop: 14 }}>
             <button className="btn btn-primary" disabled={saving}>{saving ? 'Saving...' : 'Save'}</button>

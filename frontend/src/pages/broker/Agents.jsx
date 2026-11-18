@@ -6,6 +6,10 @@ import { initials } from '../../components/icons';
 import { agentsResource, projectsResource, leadsResource } from '../../store/resources';
 import ImageUploadField from '../../components/ImageUploadField';
 import api, { SERVER_ORIGIN } from '../../api/axios';
+import ConfirmDialog from '../../components/ConfirmDialog';
+import FormField from '../../components/FormField';
+import useFormValidation from '../../hooks/useFormValidation';
+import { personName, requiredPhone, email } from '../../utils/validation';
 
 const empty = { name: '', phone: '', email: '', address: '', joiningDate: '' };
 
@@ -28,6 +32,17 @@ export default function Agents() {
   // this stays null unless the broker picks a new image to replace theirs.
   const [imageFile, setImageFile] = useState(null);
   const [err, setErr] = useState('');
+  const v = useFormValidation(form, {
+    name: personName('Full name'),
+    phone: requiredPhone('Phone number'),
+    email,
+    joiningDate: (val) => {
+      if (!val) return '';
+      const today = new Date();
+      today.setHours(23, 59, 59, 999);
+      return new Date(val) > today ? 'Joining date cannot be in the future.' : '';
+    },
+  });
   const [manageAgentId, setManageAgentId] = useState(null);
   const [projectSearch, setProjectSearch] = useState('');
   const [leadSearch, setLeadSearch] = useState('');
@@ -80,6 +95,7 @@ export default function Agents() {
     setForm(empty);
     setImageFile(null);
     setErr('');
+    v.reset();
     setShowForm(true);
   };
 
@@ -98,14 +114,21 @@ export default function Agents() {
     });
     setImageFile(null);
     setErr('');
+    v.reset();
     setShowForm(true);
   };
 
-  const closeForm = () => { setShowForm(false); setEditingId(null); setForm(empty); setImageFile(null); setErr(''); };
+  const closeForm = () => { setShowForm(false); setEditingId(null); setForm(empty); setImageFile(null); setErr(''); v.reset(); };
+
+  const setField = (key, val) => {
+    setForm((f) => ({ ...f, [key]: val }));
+    v.touch(key);
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setErr('');
+    if (!v.validate()) return;
     try {
       let agentId = editingId;
       if (editingId) {
@@ -136,12 +159,26 @@ export default function Agents() {
   // Soft delete only (see backend controllers/agentController.remove) — the
   // agent row, and everything tied to it (leads, bookings, history), stays
   // in the database. It just stops showing up here.
-  const handleDelete = async (agent) => {
-    if (!window.confirm(`Remove agent "${agent.name}"? They will no longer appear in this list or be able to log in, but their records are kept.`)) return;
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
+  const handleDelete = (agent) => {
+    setDeleteError('');
+    setPendingDelete(agent);
+  };
+
+  const runDelete = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    setDeleteError('');
     try {
-      await dispatch(agentsResource.removeOne(agent.id)).unwrap();
+      await dispatch(agentsResource.removeOne(pendingDelete.id)).unwrap();
+      setPendingDelete(null);
     } catch (ex) {
-      window.alert(typeof ex === 'string' ? ex : 'Failed to remove agent.');
+      setDeleteError(typeof ex === 'string' ? ex : 'Failed to remove agent.');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -195,13 +232,23 @@ export default function Agents() {
           <div className="card-title" style={{ marginBottom: 6 }}>{editingId ? 'Edit Agent' : 'New Agent'}</div>
           {!editingId && <p className="cell-sub" style={{ marginBottom: 14 }}>The agent will sign in using their phone number — no password needed.</p>}
           {err && <div className="auth-error">{err}</div>}
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleSubmit} noValidate>
             <div className="form-grid">
-              <div className="form-field"><label>Full Name</label><input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
-              <div className="form-field"><label>Phone Number</label><input required type="tel" placeholder="+91 98200 12345" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></div>
-              <div className="form-field"><label>Email (optional)</label><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></div>
-              <div className="form-field"><label>Address</label><input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} /></div>
-              <div className="form-field"><label>Joining Date</label><input type="date" value={form.joiningDate} onChange={(e) => setForm({ ...form, joiningDate: e.target.value })} /></div>
+              <FormField label="Full Name" required error={v.show('name')}>
+                <input value={form.name} onChange={(e) => setField('name', e.target.value)} onBlur={() => v.touch('name')} />
+              </FormField>
+              <FormField label="Phone Number" required error={v.show('phone')}>
+                <input type="tel" placeholder="+91 98200 12345" value={form.phone} onChange={(e) => setField('phone', e.target.value)} onBlur={() => v.touch('phone')} />
+              </FormField>
+              <FormField label="Email (optional)" error={v.show('email')}>
+                <input type="email" value={form.email} onChange={(e) => setField('email', e.target.value)} onBlur={() => v.touch('email')} />
+              </FormField>
+              <FormField label="Address">
+                <input value={form.address} onChange={(e) => setField('address', e.target.value)} />
+              </FormField>
+              <FormField label="Joining Date" error={v.show('joiningDate')}>
+                <input type="date" value={form.joiningDate} onChange={(e) => setField('joiningDate', e.target.value)} onBlur={() => v.touch('joiningDate')} />
+              </FormField>
             </div>
             <div className="form-grid" style={{ marginTop: 16 }}>
               <ImageUploadField
@@ -305,6 +352,18 @@ export default function Agents() {
           </div>
         )}
       </div>
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Remove agent"
+          confirmLabel="Remove"
+          message={`Remove agent "${pendingDelete.name}"? They will no longer appear in this list or be able to log in, but their records are kept.`}
+          busy={deleting}
+          error={deleteError}
+          onConfirm={runDelete}
+          onCancel={() => { if (!deleting) { setPendingDelete(null); setDeleteError(''); } }}
+        />
+      )}
     </>
   );
 }

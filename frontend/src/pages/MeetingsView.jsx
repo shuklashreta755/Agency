@@ -2,6 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { meetingsResource } from '../store/resources';
 import { agentsResource } from '../store/resources';
+import FormField from '../components/FormField';
+import useFormValidation from '../hooks/useFormValidation';
+import { textName, required } from '../utils/validation';
 
 const empty = { title: '', type: 'Meeting', scheduledAt: '', notes: '' };
 
@@ -11,50 +14,69 @@ export default function MeetingsView({ isAgent }) {
   const { items: agents } = useSelector((s) => s.agents);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(empty);
+  const v = useFormValidation(form, {
+    title: textName('Title'),
+    scheduledAt: required('Date & time'),
+  });
 
   useEffect(() => {
     dispatch(meetingsResource.fetchAll());
     if (!isAgent) dispatch(agentsResource.fetchAll());
   }, [dispatch, isAgent]);
 
+  const setField = (key, val) => {
+    setForm((f) => ({ ...f, [key]: val }));
+    v.touch(key);
+  };
+
+  const closeForm = () => {
+    setShowForm(false);
+    setForm(empty);
+    v.reset();
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!v.validate()) return;
     await dispatch(meetingsResource.createOne({ ...form, agentId: form.agentId || undefined }));
-    setForm(empty);
-    setShowForm(false);
+    closeForm();
   };
 
   return (
     <>
       <div className="toolbar">
         <div className="filters"><span className="cell-sub">{items.length} scheduled</span></div>
-        <button className="btn btn-primary" onClick={() => setShowForm(!showForm)}>+ Schedule Meeting</button>
+        <button className="btn btn-primary" onClick={() => (showForm ? closeForm() : setShowForm(true))}>+ Schedule Meeting</button>
       </div>
 
       {showForm && (
         <div className="card" style={{ marginBottom: 20 }}>
           <div className="card-title" style={{ marginBottom: 16 }}>New Meeting</div>
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleSubmit} noValidate>
             <div className="form-grid">
-              <div className="form-field"><label>Title</label><input required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></div>
-              <div className="form-field"><label>Type</label>
-                <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
+              <FormField label="Title" required error={v.show('title')}>
+                <input value={form.title} onChange={(e) => setField('title', e.target.value)} onBlur={() => v.touch('title')} />
+              </FormField>
+              <FormField label="Type">
+                <select value={form.type} onChange={(e) => setField('type', e.target.value)}>
                   <option>Meeting</option><option>Call</option><option>Site Visit</option><option>Follow Up</option>
                 </select>
-              </div>
-              <div className="form-field"><label>Date &amp; Time</label><input required type="datetime-local" value={form.scheduledAt} onChange={(e) => setForm({ ...form, scheduledAt: e.target.value })} /></div>
+              </FormField>
+              <FormField label="Date & Time" required error={v.show('scheduledAt')}>
+                <input type="datetime-local" value={form.scheduledAt} onChange={(e) => setField('scheduledAt', e.target.value)} onBlur={() => v.touch('scheduledAt')} />
+              </FormField>
               {!isAgent && (
-                <div className="form-field"><label>Assign Agent</label>
-                  <select value={form.agentId || ''} onChange={(e) => setForm({ ...form, agentId: e.target.value })}>
+                <FormField label="Assign Agent">
+                  <select value={form.agentId || ''} onChange={(e) => setField('agentId', e.target.value)}>
                     <option value="">Select agent</option>
                     {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                   </select>
-                </div>
+                </FormField>
               )}
             </div>
             <div style={{ marginTop: 16 }}>
               <button className="btn btn-primary">Save Meeting</button>{' '}
-              <button type="button" className="btn btn-ghost" onClick={() => setShowForm(false)}>Cancel</button>
+              <button type="button" className="btn btn-ghost" onClick={closeForm}>Cancel</button>
             </div>
           </form>
         </div>

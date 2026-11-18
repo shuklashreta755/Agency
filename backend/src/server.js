@@ -7,7 +7,7 @@ const morgan = require('morgan');
 const cookieParser = require('cookie-parser');
 const { Server } = require('socket.io');
 
-const { sequelize } = require('./models');
+const { sequelize, CustomUnitFeature } = require('./models');
 const initSockets = require('./sockets');
 const { backfillFullyPaidLeadConversions } = require('./controllers/bookingController');
 
@@ -31,6 +31,7 @@ const localAddressRoutes = require('./routes/localAddresses');
 const builderRoutes = require('./routes/builders');
 const attachmentRoutes = require('./routes/attachments');
 const clientRoutes = require('./routes/clients');
+const unitFeatureRoutes = require('./routes/unitFeatures');
 
 const app = express();
 const server = http.createServer(app);
@@ -75,6 +76,7 @@ app.use('/api/local-addresses', localAddressRoutes);
 app.use('/api/builders', builderRoutes);
 app.use('/api/attachments', attachmentRoutes);
 app.use('/api/clients', clientRoutes);
+app.use('/api/unit-features', unitFeatureRoutes);
 
 // 404
 app.use((req, res) => res.status(404).json({ message: 'Route not found.' }));
@@ -91,6 +93,7 @@ async function start() {
   try {
     await sequelize.authenticate();
     console.log('✓ PostgreSQL connected.');
+    await CustomUnitFeature.sync().catch((err) => console.error('Custom unit features sync failed:', err.message));
     // Catches any lead whose booking was already fully paid before the
     // auto-conversion-to-Client logic existed (see bookingController.payInstallment).
     await backfillFullyPaidLeadConversions().catch((err) => console.error('Backfill (lead->client) failed:', err.message));

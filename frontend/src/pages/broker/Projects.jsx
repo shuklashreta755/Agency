@@ -8,7 +8,11 @@ import BuilderSelect from '../../components/BuilderSelect';
 import ProjectDocuments from '../../components/ProjectDocuments';
 import ProjectImage from '../../components/ProjectImage';
 import api, { SERVER_ORIGIN } from '../../api/axios';
+import ConfirmDialog from '../../components/ConfirmDialog';
 import { projectsResource } from '../../store/resources';
+import FormField from '../../components/FormField';
+import useFormValidation from '../../hooks/useFormValidation';
+import { textName, required, optionalPositiveNumber, latitude, longitude, percentage, isBlank } from '../../utils/validation';
 
 const empty = {
   name: '', builderName: '', projectType: '', reraNumber: '', description: '',
@@ -55,6 +59,46 @@ export default function Projects() {
   // a live upload — see ProjectImage's onUploaded).
   const [imageFile, setImageFile] = useState(null);
   const [imageUrl, setImageUrl] = useState('');
+  const activePlan = plans[activePlanIndex];
+  const projectValues = { ...form, planName: activePlan?.name || '' };
+  if (activePlan) {
+    activePlan.installments.forEach((row, i) => {
+      projectValues[`instName${i}`] = row.name;
+      projectValues[`instMilestone${i}`] = row.milestone;
+      projectValues[`instPct${i}`] = row.percentage;
+    });
+  }
+  const projectRules = {
+    name: textName('Project name'),
+    country: required('Country'),
+    state: required('State'),
+    city: required('City'),
+    localAddresses: (val) => (!val || !val.length ? 'Add at least one local address.' : ''),
+    maxPrice: optionalPositiveNumber('Purchase price'),
+    latitude: (val, all) => {
+      if (isBlank(val) && isBlank(all.longitude)) return '';
+      if (isBlank(val)) return 'Latitude is required when longitude is set.';
+      return latitude(val);
+    },
+    longitude: (val, all) => {
+      if (isBlank(val) && isBlank(all.latitude)) return '';
+      if (isBlank(val)) return 'Longitude is required when latitude is set.';
+      return longitude(val);
+    },
+    possessionDate: (val, all) => {
+      if (!val || !all.launchDate) return '';
+      return val < all.launchDate ? 'Possession date cannot be before launch date.' : '';
+    },
+  };
+  if (!editingId && activePlan) {
+    projectRules.planName = textName('Plan name');
+    activePlan.installments.forEach((_, i) => {
+      projectRules[`instName${i}`] = required('Installment name');
+      projectRules[`instMilestone${i}`] = required('Due condition');
+      projectRules[`instPct${i}`] = percentage('Percentage');
+    });
+  }
+  const v = useFormValidation(projectValues, projectRules);
 
   useEffect(() => { dispatch(projectsResource.fetchAll()); }, [dispatch]);
 
@@ -67,6 +111,7 @@ export default function Projects() {
     setImageUrl('');
     setFormError('');
     setEditingId(null);
+    v.reset();
   };
 
   const startEdit = (p) => {
@@ -87,15 +132,30 @@ export default function Projects() {
     setImageUrl(p.imageUrl || '');
     setFormError('');
     setEditingId(p.id);
+    v.reset();
     setShowForm(true);
   };
 
-  const handleDelete = async (p) => {
-    if (!window.confirm(`Delete "${p.name}"? This permanently removes its units, bookings, and payment plans, and unassigns any agents from it. Leads that showed interest in it are kept — just unlinked. This can't be undone.`)) return;
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
+  const handleDelete = (p) => {
+    setDeleteError('');
+    setPendingDelete(p);
+  };
+
+  const runDelete = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    setDeleteError('');
     try {
-      await dispatch(projectsResource.removeOne(p.id)).unwrap();
+      await dispatch(projectsResource.removeOne(pendingDelete.id)).unwrap();
+      setPendingDelete(null);
     } catch (err) {
-      window.alert(typeof err === 'string' ? err : 'Could not delete project.');
+      setDeleteError(typeof err === 'string' ? err : 'Could not delete project.');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -114,14 +174,15 @@ export default function Projects() {
     idx === i ? { ...p, installments: p.installments.map((row, r) => (r === rowIdx ? { ...row, [key]: val } : row)) } : p
   )));
 
+  const setField = (key, val) => {
+    setForm((f) => ({ ...f, [key]: val }));
+    v.touch(key);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setFormError('');
-
-    if (!form.country) { setFormError('Country is required.'); return; }
-    if (!form.state) { setFormError('State is required.'); return; }
-    if (!form.city) { setFormError('City is required.'); return; }
-    if (!form.localAddresses.length) { setFormError('Add at least one local address.'); return; }
+    if (!v.validate()) return;
 
     if (!editingId) {
       for (let i = 0; i < plans.length; i++) {
@@ -187,8 +248,9 @@ export default function Projects() {
     p.name.toLowerCase().includes(search.toLowerCase()) || (p.city || '').toLowerCase().includes(search.toLowerCase())
   );
 
-  const fmtPrice = (v) => (v ? `₹${Number(v).toLocaleString('en-IN')}` : '—');
-  const activePlan = plans[activePlanIndex];
+  const fmtPrice = (val) => (val ? `₹${Number(val).toLocaleString('en-IN')}` : '—');
+  const planPctOk = activePlan ? Math.abs(planTotal(activePlan) - 100) < 0.05 : true;
+  const showPlanTotalError = !editingId && activePlan && activePlan.installments.every((r) => r.percentage !== '') && !planPctOk;
 
   return (
     <>
@@ -206,28 +268,41 @@ export default function Projects() {
       {showForm && (
         <div className="card" style={{ marginBottom: 20 }}>
           <div className="card-title" style={{ marginBottom: 16 }}>{editingId ? 'Edit Project' : 'New Project'}</div>
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleSubmit} noValidate>
             <div className="form-grid">
-              <div className="form-field"><label>Project Name</label><input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
-              <div className="form-field">
-                <label>Builder Name</label>
-                <BuilderSelect value={form.builderName} onChange={(builderName) => setForm({ ...form, builderName })} />
-              </div>
-              <div className="form-field"><label>Project Type</label><input value={form.projectType} onChange={(e) => setForm({ ...form, projectType: e.target.value })} placeholder="e.g. Residential" /></div>
-              <div className="form-field"><label>RERA Number</label><input value={form.reraNumber} onChange={(e) => setForm({ ...form, reraNumber: e.target.value })} /></div>
+              <FormField label="Project Name" required error={v.show('name')}>
+                <input value={form.name} onChange={(e) => setField('name', e.target.value)} onBlur={() => v.touch('name')} />
+              </FormField>
+              <FormField label="Builder Name">
+                <BuilderSelect value={form.builderName} onChange={(builderName) => setField('builderName', builderName)} />
+              </FormField>
+              <FormField label="Project Type">
+                <input value={form.projectType} onChange={(e) => setField('projectType', e.target.value)} placeholder="e.g. Residential" />
+              </FormField>
+              <FormField label="RERA Number">
+                <input value={form.reraNumber} onChange={(e) => setField('reraNumber', e.target.value)} />
+              </FormField>
             </div>
 
             <div style={{ border: '1px solid var(--blue-500)', borderRadius: 10, padding: 16, marginTop: 16 }}>
               <div className="form-grid">
                 <LocationSelect
                   value={{ country: form.country, state: form.state, city: form.city }}
-                  onChange={(loc) => setForm({ ...form, ...loc })}
+                  errors={{ country: v.show('country'), state: v.show('state'), city: v.show('city') }}
+                  onBlurField={(key) => v.touch(key)}
+                  onChange={(loc) => {
+                    setForm((f) => ({ ...f, ...loc }));
+                    v.touch('country');
+                    if (loc.state) v.touch('state');
+                    if (loc.city) v.touch('city');
+                  }}
                 />
               </div>
               <LocalAddresses
                 value={form.localAddresses}
                 city={form.city}
-                onChange={(localAddresses) => setForm({ ...form, localAddresses })}
+                error={v.show('localAddresses')}
+                onChange={(localAddresses) => { setForm((f) => ({ ...f, localAddresses })); v.touch('localAddresses'); }}
               />
             </div>
 
@@ -242,21 +317,35 @@ export default function Projects() {
             </div>
 
             <div className="form-grid" style={{ marginTop: 16 }}>
-              <div className="form-field"><label>Launch Date</label><input type="date" value={form.launchDate} onChange={(e) => setForm({ ...form, launchDate: e.target.value })} /></div>
-              <div className="form-field"><label>Possession Date</label><input type="date" value={form.possessionDate} onChange={(e) => setForm({ ...form, possessionDate: e.target.value })} /></div>
-              <div className="form-field"><label>Purchase Price (₹)</label><input type="number" value={form.maxPrice} onChange={(e) => setForm({ ...form, maxPrice: e.target.value })} /></div>
-              <div className="form-field"><label>Status</label>
-                <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+              <FormField label="Launch Date">
+                <input type="date" value={form.launchDate} onChange={(e) => setField('launchDate', e.target.value)} />
+              </FormField>
+              <FormField label="Possession Date" error={v.show('possessionDate')}>
+                <input type="date" value={form.possessionDate} onChange={(e) => setField('possessionDate', e.target.value)} onBlur={() => v.touch('possessionDate')} />
+              </FormField>
+              <FormField label="Purchase Price (₹)" error={v.show('maxPrice')}>
+                <input type="number" value={form.maxPrice} onChange={(e) => setField('maxPrice', e.target.value)} onBlur={() => v.touch('maxPrice')} />
+              </FormField>
+              <FormField label="Status">
+                <select value={form.status} onChange={(e) => setField('status', e.target.value)}>
                   <option>Active</option><option>Upcoming</option><option>Sold Out</option><option>Inactive</option>
                 </select>
-              </div>
-              <div className="form-field" style={{ gridColumn: '1 / -1' }}><label>Description</label><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
-              <div className="form-field"><label>Latitude (optional)</label><input type="number" step="any" value={form.latitude} onChange={(e) => setForm({ ...form, latitude: e.target.value })} placeholder="e.g. 22.7532" /></div>
-              <div className="form-field"><label>Longitude (optional)</label><input type="number" step="any" value={form.longitude} onChange={(e) => setForm({ ...form, longitude: e.target.value })} placeholder="e.g. 75.8937" /></div>
+              </FormField>
+              <FormField label="Description" style={{ gridColumn: '1 / -1' }}>
+                <input value={form.description} onChange={(e) => setField('description', e.target.value)} />
+              </FormField>
+              <FormField label="Latitude (optional)" error={v.show('latitude')}>
+                <input type="number" step="any" value={form.latitude} onChange={(e) => setField('latitude', e.target.value)} onBlur={() => v.touch('latitude')} placeholder="e.g. 22.7532" />
+              </FormField>
+              <FormField label="Longitude (optional)" error={v.show('longitude')}>
+                <input type="number" step="any" value={form.longitude} onChange={(e) => setField('longitude', e.target.value)} onBlur={() => v.touch('longitude')} placeholder="e.g. 75.8937" />
+              </FormField>
               <div className="form-field" style={{ justifyContent: 'flex-end' }}>
                 <button type="button" className="btn btn-ghost" style={{ marginTop: 6 }} onClick={() => {
                   navigator.geolocation?.getCurrentPosition((pos) => {
                     setForm((f) => ({ ...f, latitude: pos.coords.latitude, longitude: pos.coords.longitude }));
+                    v.touch('latitude');
+                    v.touch('longitude');
                   });
                 }}>Use my current location</button>
               </div>
@@ -300,14 +389,12 @@ export default function Projects() {
                     {activePlan && (
                       <div>
                         <div className="form-grid" style={{ marginBottom: 14 }}>
-                          <div className="form-field">
-                            <label>Plan Name</label>
-                            <input required placeholder="e.g. 2 Installment" value={activePlan.name} onChange={(e) => updatePlanName(activePlanIndex, e.target.value)} />
-                          </div>
-                          <div className="form-field">
-                            <label>Total Installments</label>
+                          <FormField label="Plan Name" required error={v.show('planName')}>
+                            <input placeholder="e.g. 2 Installment" value={activePlan.name} onChange={(e) => { updatePlanName(activePlanIndex, e.target.value); v.touch('planName'); }} onBlur={() => v.touch('planName')} />
+                          </FormField>
+                          <FormField label="Total Installments">
                             <input disabled value={activePlan.installments.length} />
-                          </div>
+                          </FormField>
                         </div>
 
                         <div className="table-wrap">
@@ -318,13 +405,20 @@ export default function Projects() {
                             <tbody>
                               {activePlan.installments.map((row, rowIdx) => (
                                 <tr key={rowIdx}>
-                                  <td><input required placeholder={`${rowIdx + 1} Installment`} value={row.name} onChange={(e) => updateRow(activePlanIndex, rowIdx, 'name', e.target.value)} /></td>
-                                  <td><input required placeholder="e.g. At the time of Booking" value={row.milestone} onChange={(e) => updateRow(activePlanIndex, rowIdx, 'milestone', e.target.value)} /></td>
+                                  <td>
+                                    <input placeholder={`${rowIdx + 1} Installment`} value={row.name} onChange={(e) => { updateRow(activePlanIndex, rowIdx, 'name', e.target.value); v.touch(`instName${rowIdx}`); }} onBlur={() => v.touch(`instName${rowIdx}`)} style={v.show(`instName${rowIdx}`) ? { borderColor: 'var(--red)' } : undefined} />
+                                    {v.show(`instName${rowIdx}`) && <div className="field-error">{v.show(`instName${rowIdx}`)}</div>}
+                                  </td>
+                                  <td>
+                                    <input placeholder="e.g. At the time of Booking" value={row.milestone} onChange={(e) => { updateRow(activePlanIndex, rowIdx, 'milestone', e.target.value); v.touch(`instMilestone${rowIdx}`); }} onBlur={() => v.touch(`instMilestone${rowIdx}`)} style={v.show(`instMilestone${rowIdx}`) ? { borderColor: 'var(--red)' } : undefined} />
+                                    {v.show(`instMilestone${rowIdx}`) && <div className="field-error">{v.show(`instMilestone${rowIdx}`)}</div>}
+                                  </td>
                                   <td>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                                      <input required type="number" min="0.01" step="0.01" style={{ width: 80 }} value={row.percentage} onChange={(e) => updateRow(activePlanIndex, rowIdx, 'percentage', e.target.value)} />
+                                      <input type="number" min="0.01" step="0.01" style={{ width: 80, borderColor: v.show(`instPct${rowIdx}`) ? 'var(--red)' : undefined }} value={row.percentage} onChange={(e) => { updateRow(activePlanIndex, rowIdx, 'percentage', e.target.value); v.touch(`instPct${rowIdx}`); }} onBlur={() => v.touch(`instPct${rowIdx}`)} />
                                       <span className="cell-sub">%</span>
                                     </div>
+                                    {v.show(`instPct${rowIdx}`) && <div className="field-error">{v.show(`instPct${rowIdx}`)}</div>}
                                   </td>
                                   <td>
                                     {activePlan.installments.length > 1 && (
@@ -336,6 +430,7 @@ export default function Projects() {
                             </tbody>
                           </table>
                         </div>
+                        {showPlanTotalError && <div className="field-error" style={{ marginTop: 8 }}>This plan totals {planTotal(activePlan)}% — each plan must total 100%.</div>}
 
                         <div className="row-flex" style={{ justifyContent: 'space-between', marginTop: 12, flexWrap: 'wrap', gap: 10 }}>
                           <span className="link-btn" onClick={() => addRow(activePlanIndex)}>+ Add Installment</span>
@@ -431,6 +526,17 @@ export default function Projects() {
         ))}
         {filtered.length === 0 && <div className="card" style={{ gridColumn: '1/-1', textAlign: 'center', color: 'var(--text-600)' }}>No projects found.</div>}
       </div>
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Delete project"
+          message={`Delete "${pendingDelete.name}"? This permanently removes its units, bookings, and payment plans, and unassigns any agents from it. Leads that showed interest in it are kept — just unlinked. This can't be undone.`}
+          busy={deleting}
+          error={deleteError}
+          onConfirm={runDelete}
+          onCancel={() => { if (!deleting) { setPendingDelete(null); setDeleteError(''); } }}
+        />
+      )}
     </>
   );
 }

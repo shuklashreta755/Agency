@@ -15,7 +15,7 @@ import api from '../api/axios';
  * value: string — the currently-selected/typed builder name
  * onChange: (string) => void
  */
-export default function BuilderSelect({ value = '', onChange }) {
+export default function BuilderSelect({ value = '', onChange, invalid = false, onBlur }) {
   const [text, setText] = useState(value);
   const [open, setOpen] = useState(false);
   const [builders, setBuilders] = useState([]);
@@ -93,7 +93,8 @@ export default function BuilderSelect({ value = '', onChange }) {
             onChange={(e) => { setText(e.target.value); setOpen(true); }}
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } if (e.key === 'Escape') { setOpen(false); setText(value || ''); } }}
             placeholder="Search or add a builder"
-            style={{ width: '100%', boxSizing: 'border-box', paddingRight: value ? 28 : undefined }}
+            onBlur={onBlur}
+            style={{ width: '100%', boxSizing: 'border-box', paddingRight: value ? 28 : undefined, borderColor: invalid ? 'var(--red)' : undefined }}
           />
           {!open && value && (
             <span

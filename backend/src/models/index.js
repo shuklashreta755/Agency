@@ -11,6 +11,7 @@ const LeadDocument = require('./LeadDocument');
 const SiteVisitTracker = require('./SiteVisitTracker');
 const SiteVisitStep = require('./SiteVisitStep');
 const Unit = require('./Unit');
+const CustomUnitFeature = require('./CustomUnitFeature');
 const UnitImage = require('./UnitImage');
 const Installment = require('./Installment');
 const PaymentPlan = require('./PaymentPlan');
@@ -81,6 +82,10 @@ SiteVisitStep.belongsTo(SiteVisitTracker, { foreignKey: 'trackerId', as: 'tracke
 Project.hasMany(Unit, { foreignKey: 'projectId', as: 'units', onDelete: 'CASCADE' });
 Unit.belongsTo(Project, { foreignKey: 'projectId', as: 'project' });
 Unit.belongsTo(User, { foreignKey: 'brokerId', as: 'broker' });
+
+// Custom unit-feature names this broker added (see models/CustomUnitFeature.js).
+User.hasMany(CustomUnitFeature, { foreignKey: 'brokerId', as: 'customUnitFeatures' });
+CustomUnitFeature.belongsTo(User, { foreignKey: 'brokerId', as: 'broker' });
 
 Unit.hasMany(UnitImage, { foreignKey: 'unitId', as: 'images', onDelete: 'CASCADE' });
 UnitImage.belongsTo(Unit, { foreignKey: 'unitId' });
@@ -165,6 +170,7 @@ module.exports = {
   SiteVisitTracker,
   SiteVisitStep,
   Unit,
+  CustomUnitFeature,
   UnitImage,
   Installment,
   PaymentPlan,

@@ -2,6 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Badge from '../../components/Badge';
 import api, { SERVER_ORIGIN } from '../../api/axios';
+import FormField from '../../components/FormField';
+import useFormValidation from '../../hooks/useFormValidation';
+import { positiveNumber, nonNegativeNumber, isBlank } from '../../utils/validation';
 
 export default function UnitDetail() {
   const { id } = useParams();
@@ -12,6 +15,18 @@ export default function UnitDetail() {
   const [editingPricing, setEditingPricing] = useState(false);
   const [pricingForm, setPricingForm] = useState({ basicPrice: '', totalPrice: '', advanceAmount: '' });
   const [saving, setSaving] = useState(false);
+  const [pricingError, setPricingError] = useState('');
+  const pricingV = useFormValidation(pricingForm, {
+    totalPrice: positiveNumber('Total price'),
+    basicPrice: nonNegativeNumber('Basic price'),
+    advanceAmount: (val, all) => {
+      const nErr = nonNegativeNumber('Advance paid')(val);
+      if (nErr) return nErr;
+      if (isBlank(val) || isBlank(all.totalPrice)) return '';
+      if (Number(val) > Number(all.totalPrice)) return 'Advance cannot be more than total price.';
+      return '';
+    },
+  });
 
   const load = async () => {
     setLoading(true);
@@ -28,13 +43,23 @@ export default function UnitDetail() {
 
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [id]);
 
+  const setPricingField = (key, val) => {
+    setPricingForm((f) => ({ ...f, [key]: val }));
+    pricingV.touch(key);
+  };
+
   const handleSavePricing = async (e) => {
     e.preventDefault();
+    setPricingError('');
+    if (!pricingV.validate()) return;
     setSaving(true);
     try {
       await api.patch(`/units/${id}/pricing`, pricingForm);
       setEditingPricing(false);
+      pricingV.reset();
       await load();
+    } catch (err) {
+      setPricingError(err.response?.data?.message || 'Could not save pricing.');
     } finally {
       setSaving(false);
     }
@@ -84,19 +109,26 @@ export default function UnitDetail() {
       <div className="card" style={{ marginBottom: 20 }}>
         <div className="card-head">
           <div className="card-title">Pricing<span>Only pricing fields can be edited here — changing Total Price recalculates the installment schedule automatically.</span></div>
-          {!editingPricing && <button className="link-btn" onClick={() => setEditingPricing(true)}>Edit</button>}
+          {!editingPricing && <button className="link-btn" onClick={() => { setEditingPricing(true); setPricingError(''); pricingV.reset(); }}>Edit</button>}
         </div>
 
         {editingPricing ? (
-          <form onSubmit={handleSavePricing}>
+          <form onSubmit={handleSavePricing} noValidate>
             <div className="form-grid">
-              <div className="form-field"><label>Basic Price (₹)</label><input type="number" value={pricingForm.basicPrice} onChange={(e) => setPricingForm({ ...pricingForm, basicPrice: e.target.value })} /></div>
-              <div className="form-field"><label>Total Price (₹)</label><input type="number" value={pricingForm.totalPrice} onChange={(e) => setPricingForm({ ...pricingForm, totalPrice: e.target.value })} /></div>
-              <div className="form-field"><label>Advance Paid (₹)</label><input type="number" value={pricingForm.advanceAmount} onChange={(e) => setPricingForm({ ...pricingForm, advanceAmount: e.target.value })} /></div>
+              <FormField label="Basic Price (₹)" error={pricingV.show('basicPrice')}>
+                <input type="number" value={pricingForm.basicPrice} onChange={(e) => setPricingField('basicPrice', e.target.value)} onBlur={() => pricingV.touch('basicPrice')} />
+              </FormField>
+              <FormField label="Total Price (₹)" required error={pricingV.show('totalPrice')}>
+                <input type="number" value={pricingForm.totalPrice} onChange={(e) => setPricingField('totalPrice', e.target.value)} onBlur={() => pricingV.touch('totalPrice')} />
+              </FormField>
+              <FormField label="Advance Paid (₹)" error={pricingV.show('advanceAmount')}>
+                <input type="number" value={pricingForm.advanceAmount} onChange={(e) => setPricingField('advanceAmount', e.target.value)} onBlur={() => pricingV.touch('advanceAmount')} />
+              </FormField>
             </div>
+            {pricingError && <div className="field-error" style={{ marginTop: 10 }}>{pricingError}</div>}
             <div style={{ marginTop: 14 }}>
               <button className="btn btn-primary" disabled={saving}>{saving ? 'Saving...' : 'Save Pricing'}</button>{' '}
-              <button type="button" className="btn btn-ghost" onClick={() => setEditingPricing(false)}>Cancel</button>
+              <button type="button" className="btn btn-ghost" onClick={() => { setEditingPricing(false); setPricingError(''); pricingV.reset(); }}>Cancel</button>
             </div>
           </form>
         ) : (
@@ -110,7 +142,15 @@ export default function UnitDetail() {
       </div>
 
       <div className="card">
-        <div className="card-head"><div className="card-title">Payment Information<span>Plan: {unit.paymentPlanRef?.name || 'Full Payment'}</span></div></div>
+        <div className="card-head">
+          <div className="card-title">
+            Payment Information
+            <span>
+              Plan: {unit.paymentPlanRef?.name || 'Full Payment'}
+              {Number(unit.advanceAmount) > 0 ? ` · ${fmt(unit.advanceAmount)} advance is deducted from installment 1` : ''}
+            </span>
+          </div>
+        </div>
         <div className="table-wrap">
           <table>
             <thead><tr><th>Installment No.</th><th>Name</th><th>Milestone / Due Condition</th><th>Due Date</th><th>Percentage</th><th>Amount</th><th>Status</th></tr></thead>

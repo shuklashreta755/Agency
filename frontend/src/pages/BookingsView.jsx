@@ -5,6 +5,10 @@ import Badge from '../components/Badge';
 import SearchableSelect from '../components/SearchableSelect';
 import { agentsResource } from '../store/resources';
 import api from '../api/axios';
+import ConfirmDialog from '../components/ConfirmDialog';
+import FormField from '../components/FormField';
+import useFormValidation from '../hooks/useFormValidation';
+import { required, positiveNumber } from '../utils/validation';
 
 const emptyForm = { projectId: '', unitId: '', agentId: '', leadType: 'Client', leadId: '', bookingDate: '', paymentPlanId: '', sellingPrice: '' };
 
@@ -31,6 +35,13 @@ export default function BookingsView({ isAgent }) {
   const [leadOptions, setLeadOptions] = useState([]);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
+  const v = useFormValidation(form, {
+    projectId: required('Project'),
+    unitId: required('Unit'),
+    bookingDate: required('Booking date'),
+    leadId: required(form.leadType === 'Client' ? 'Client' : 'Lead'),
+    sellingPrice: positiveNumber('Selling price'),
+  });
   // Broker Panel only — "Broker Bookings" (created by the broker) vs
   // "Agent's Bookings" (created by any agent). Agent Panel has no tabs; it
   // always sees just its own bookings, unaffected by this.
@@ -98,19 +109,18 @@ export default function BookingsView({ isAgent }) {
     setPaymentPlans([]);
     setLeadOptions([]);
     setFormError('');
+    v.reset();
+  };
+
+  const setField = (key, val) => {
+    setForm((f) => ({ ...f, [key]: val }));
+    v.touch(key);
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setFormError('');
-    if (!form.projectId || !form.unitId || !form.leadId || !form.bookingDate) {
-      setFormError('Please fill in all required fields.');
-      return;
-    }
-    if (form.sellingPrice === '' || Number(form.sellingPrice) <= 0) {
-      setFormError('Selling Price must be a positive number.');
-      return;
-    }
+    if (!v.validate()) return;
     setSaving(true);
     try {
       const payload = { ...form };
@@ -128,10 +138,28 @@ export default function BookingsView({ isAgent }) {
     }
   };
 
-  const handleDelete = async (b) => {
-    if (!window.confirm(`Delete this booking for "${b.lead?.customerName || 'this lead'}"?`)) return;
-    await api.delete(`/bookings/${b.id}`);
-    await loadBookings();
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
+  const handleDelete = (b) => {
+    setDeleteError('');
+    setPendingDelete(b);
+  };
+
+  const runDelete = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      await api.delete(`/bookings/${pendingDelete.id}`);
+      setPendingDelete(null);
+      await loadBookings();
+    } catch (err) {
+      setDeleteError(err.response?.data?.message || 'Could not delete booking.');
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const fmt = (v) => (v || v === 0 ? `₹${Number(v).toLocaleString('en-IN')}` : '—');
@@ -156,38 +184,42 @@ export default function BookingsView({ isAgent }) {
       {showForm && (
         <div className="card" style={{ marginBottom: 20 }}>
           <div className="card-title" style={{ marginBottom: 16 }}>New Booking</div>
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleSubmit} noValidate>
             <div className="form-grid">
-              <div className="form-field"><label>Project</label>
+              <FormField label="Project" required error={v.show('projectId')}>
                 <SearchableSelect
                   variant="form" placeholder="Select project" value={form.projectId}
-                  onChange={(val) => setForm({ ...form, projectId: val })}
+                  invalid={!!v.show('projectId')}
+                  onBlur={() => v.touch('projectId')}
+                  onChange={(val) => setField('projectId', val)}
                   options={projects.map((p) => ({ value: p.id, label: p.name }))}
                 />
-              </div>
-              <div className="form-field"><label>Unit</label>
+              </FormField>
+              <FormField label="Unit" required error={v.show('unitId')}>
                 <SearchableSelect
                   variant="form" placeholder={form.projectId ? 'Select unit' : 'Select a project first'} value={form.unitId}
-                  onChange={(val) => setForm({ ...form, unitId: val })}
+                  invalid={!!v.show('unitId')}
+                  onBlur={() => v.touch('unitId')}
+                  onChange={(val) => setField('unitId', val)}
                   options={units.map((u) => ({ value: u.id, label: `${u.unitNo} — ${u.unitType}` }))}
                 />
-              </div>
+              </FormField>
 
               {!isAgent && (
-                <div className="form-field"><label>Agent (optional)</label>
+                <FormField label="Agent (optional)">
                   <SearchableSelect
                     variant="form" placeholder="Unassigned" value={form.agentId}
-                    onChange={(val) => setForm({ ...form, agentId: val })}
+                    onChange={(val) => setField('agentId', val)}
                     options={agents.map((a) => ({ value: a.id, label: a.name }))}
                   />
-                </div>
+                </FormField>
               )}
 
-              <div className="form-field"><label>Booking Date</label>
-                <input required type="date" value={form.bookingDate} onChange={(e) => setForm({ ...form, bookingDate: e.target.value })} />
-              </div>
+              <FormField label="Booking Date" required error={v.show('bookingDate')}>
+                <input type="date" value={form.bookingDate} onChange={(e) => setField('bookingDate', e.target.value)} onBlur={() => v.touch('bookingDate')} />
+              </FormField>
 
-              <div className="form-field"><label>Lead Type</label>
+              <FormField label="Lead Type">
                 <div className="chip-row" style={{ marginTop: 2 }}>
                   <span className={`chip${form.leadType === 'Client' ? ' active' : ''}`} onClick={() => setForm({ ...form, leadType: 'Client' })}>
                     Client (Purchased)
@@ -196,35 +228,42 @@ export default function BookingsView({ isAgent }) {
                     {isAgent ? 'Lead (Assigned to Me)' : 'Lead (Unassigned)'}
                   </span>
                 </div>
-              </div>
-              <div className="form-field"><label>{form.leadType === 'Client' ? 'Client' : 'Lead'}</label>
+              </FormField>
+              <FormField label={form.leadType === 'Client' ? 'Client' : 'Lead'} required error={v.show('leadId')}>
                 <SearchableSelect
                   variant="form" placeholder={form.leadType === 'Client' ? 'Select client' : 'Select lead'} value={form.leadId}
-                  onChange={(val) => setForm({ ...form, leadId: val })}
+                  invalid={!!v.show('leadId')}
+                  onBlur={() => v.touch('leadId')}
+                  onChange={(val) => setField('leadId', val)}
                   options={leadOptions.map((l) => ({ value: l.id, label: `${l.customerName} — ${l.phone}` }))}
                 />
-              </div>
+              </FormField>
 
-              <div className="form-field"><label>Unit Price (₹)</label>
+              <FormField label="Unit Price (₹)">
                 <input disabled placeholder="Select a unit" value={selectedUnit ? `₹${Number(selectedUnit.totalPrice).toLocaleString('en-IN')}` : ''} />
-              </div>
-              <div className="form-field"><label>Selling Price (₹)</label>
+              </FormField>
+              <FormField
+                label="Selling Price (₹)"
+                required
+                error={v.show('sellingPrice')}
+                hint={!v.show('sellingPrice') ? 'Defaults to the unit price — override for a negotiated price. Every payment/installment is calculated from this.' : undefined}
+              >
                 <input
-                  required type="number" min="1" step="0.01"
+                  type="number" min="1" step="0.01"
                   disabled={!selectedUnit}
                   placeholder={selectedUnit ? 'Enter selling price' : 'Select a unit first'}
                   value={form.sellingPrice}
-                  onChange={(e) => setForm({ ...form, sellingPrice: e.target.value })}
+                  onChange={(e) => setField('sellingPrice', e.target.value)}
+                  onBlur={() => v.touch('sellingPrice')}
                 />
-                <span className="cell-sub">Defaults to the unit price — override for a negotiated price. Every payment/installment is calculated from this.</span>
-              </div>
-              <div className="form-field"><label>Payment Plan</label>
+              </FormField>
+              <FormField label="Payment Plan">
                 <SearchableSelect
                   variant="form" placeholder="Full Payment (no installments)" value={form.paymentPlanId}
-                  onChange={(val) => setForm({ ...form, paymentPlanId: val })}
+                  onChange={(val) => setField('paymentPlanId', val)}
                   options={paymentPlans.map((p) => ({ value: p.id, label: p.name }))}
                 />
-              </div>
+              </FormField>
             </div>
 
             {formError && <div className="cell-sub" style={{ color: 'var(--red)', marginTop: 12 }}>{formError}</div>}
@@ -277,6 +316,17 @@ export default function BookingsView({ isAgent }) {
           </table>
         </div>
       </div>
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Delete booking"
+          message={`Delete this booking for "${pendingDelete.lead?.customerName || 'this lead'}"? This cannot be undone.`}
+          busy={deleting}
+          error={deleteError}
+          onConfirm={runDelete}
+          onCancel={() => { if (!deleting) { setPendingDelete(null); setDeleteError(''); } }}
+        />
+      )}
     </>
   );
 }

@@ -10,7 +10,7 @@ const UNIT_FEATURES = [
   "Near Children's Play Area", 'Near Gym', 'Near Temple', 'Near School',
 ];
 
-const UNIT_STATUSES = ['Available', 'Booked', 'Sold', 'On Hold'];
+const UNIT_STATUSES = ['Available', 'Booked', 'Sold'];
 
 const INSTALLMENT_STATUSES = ['Pending', 'Paid', 'Overdue'];
 

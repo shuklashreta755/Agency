@@ -8,7 +8,8 @@ const Unit = sequelize.define('Unit', {
   brokerId: { type: DataTypes.UUID, allowNull: false, field: 'broker_id' },
   unitNo: { type: DataTypes.STRING, allowNull: false, field: 'unit_no' },
   unitType: { type: DataTypes.ENUM(...UNIT_TYPES), allowNull: false, field: 'unit_type' },
-  // Multi-select — stored as a plain string array; validated against UNIT_FEATURES in the controller.
+  // Multi-select — stored as a plain string array. Names are either built-in
+  // UNIT_FEATURES or this broker's custom features (see CustomUnitFeature).
   features: { type: DataTypes.ARRAY(DataTypes.STRING), defaultValue: [] },
   sizeSqft: { type: DataTypes.DECIMAL(10, 2), field: 'size_sqft' },
   basicPrice: { type: DataTypes.DECIMAL(14, 2), allowNull: false, field: 'basic_price' },

@@ -1,7 +1,9 @@
+const { Op } = require('sequelize');
 const { PaymentPlan, PaymentPlanInstallment, Project, Unit, Booking, BookingInstallment, User } = require('../models');
 const { logActivity } = require('../utils/activityLogger');
 const { validatePlanPayload } = require('../utils/paymentPlanValidation');
 const { notifyAgent } = require('../utils/notify');
+const { advanceError } = require('../utils/installmentMoney');
 
 const planInclude = [
   { model: PaymentPlanInstallment, as: 'installments', separate: true, order: [['sequenceNumber', 'ASC']] },
@@ -28,9 +30,24 @@ async function list(req, res) {
 
   const plans = await PaymentPlan.findAll({
     where: { projectId: project.id },
-    include: planInclude,
     order: [['createdAt', 'ASC']],
   });
+
+  // Load installment rows ourselves and attach them by paymentPlanId.
+  // Eager-loading every plan's installments in one include was handing Plan 2
+  // Plan 1's rows (and the other way around) on the Add Unit preview.
+  const installmentRows = plans.length
+    ? await PaymentPlanInstallment.findAll({
+      where: { paymentPlanId: { [Op.in]: plans.map((p) => p.id) } },
+      order: [['sequenceNumber', 'ASC']],
+    })
+    : [];
+  const installmentsByPlan = new Map();
+  for (const row of installmentRows) {
+    const key = String(row.paymentPlanId);
+    if (!installmentsByPlan.has(key)) installmentsByPlan.set(key, []);
+    installmentsByPlan.get(key).push(row.toJSON());
+  }
 
   const data = await Promise.all(plans.map(async (plan) => {
     const bookings = await Booking.findAll({
@@ -39,7 +56,12 @@ async function list(req, res) {
     });
     const cycleBookings = bookings.filter((b) => b.installments.length > 0); // only bookings actually on the CURRENT cycle
     const cycleCompleted = cycleBookings.length > 0 && cycleBookings.every((b) => b.installments.every((i) => i.status === 'Paid'));
-    return { ...plan.toJSON(), cycleBookingsCount: cycleBookings.length, cycleCompleted };
+    return {
+      ...plan.toJSON(),
+      installments: installmentsByPlan.get(String(plan.id)) || [],
+      cycleBookingsCount: cycleBookings.length,
+      cycleCompleted,
+    };
   }));
 
   res.json({ data });
@@ -84,6 +106,14 @@ async function update(req, res) {
 
   const error = validatePlanPayload(req.body);
   if (error) return res.status(400).json({ message: error });
+
+  // A smaller first installment must still be able to absorb each unit's advance.
+  const newFirstPct = Number(req.body.installments[0].percentage);
+  const unitsOnPlan = await Unit.findAll({ where: { paymentPlanId: plan.id } });
+  for (const unit of unitsOnPlan) {
+    const advErr = advanceError(unit.totalPrice, newFirstPct, unit.advanceAmount);
+    if (advErr) return res.status(400).json({ message: `Unit "${unit.unitNo}": ${advErr}` });
+  }
 
   await plan.update({ name: req.body.name.trim() });
   await PaymentPlanInstallment.destroy({ where: { paymentPlanId: plan.id } });

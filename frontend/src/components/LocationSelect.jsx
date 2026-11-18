@@ -24,7 +24,7 @@ const COUNTRY_BY_CODE = Object.fromEntries(ALL_COUNTRIES.map((c) => [c.isoCode, 
  * value: { country, state, city } (each a plain NAME string, or '')
  * onChange: (nextValue) => void
  */
-export default function LocationSelect({ value, onChange }) {
+export default function LocationSelect({ value, onChange, errors = {}, onBlurField }) {
   const { country, state, city } = value;
 
   const countryCode = country ? COUNTRY_BY_NAME[country]?.isoCode : '';
@@ -38,35 +38,44 @@ export default function LocationSelect({ value, onChange }) {
 
   return (
     <>
-      <div className="form-field">
-        <label>Country</label>
+      <div className={`form-field${errors.country ? ' has-error' : ''}`}>
+        <label>Country<span className="field-required"> *</span></label>
         <SearchableSelect
           variant="form"
           placeholder="Select country"
           options={COUNTRY_OPTIONS}
           value={countryCode}
+          invalid={!!errors.country}
+          onBlur={() => onBlurField?.('country')}
           onChange={(isoCode) => onChange({ country: COUNTRY_BY_CODE[isoCode]?.name || '', state: '', city: '' })}
         />
+        {errors.country && <div className="field-error">{errors.country}</div>}
       </div>
-      <div className="form-field">
-        <label>State</label>
+      <div className={`form-field${errors.state ? ' has-error' : ''}`}>
+        <label>State<span className="field-required"> *</span></label>
         <SearchableSelect
           variant="form"
           placeholder={country ? 'Select state' : 'Select a country first'}
           options={stateOptions}
           value={stateCode}
+          invalid={!!errors.state}
+          onBlur={() => onBlurField?.('state')}
           onChange={(isoCode) => onChange({ country, state: statesRaw.find((s) => s.isoCode === isoCode)?.name || '', city: '' })}
         />
+        {errors.state && <div className="field-error">{errors.state}</div>}
       </div>
-      <div className="form-field">
-        <label>City</label>
+      <div className={`form-field${errors.city ? ' has-error' : ''}`}>
+        <label>City<span className="field-required"> *</span></label>
         <SearchableSelect
           variant="form"
           placeholder={state ? 'Select city' : 'Select a state first'}
           options={cityOptions}
           value={city}
+          invalid={!!errors.city}
+          onBlur={() => onBlurField?.('city')}
           onChange={(v) => onChange({ country, state, city: v })}
         />
+        {errors.city && <div className="field-error">{errors.city}</div>}
       </div>
     </>
   );

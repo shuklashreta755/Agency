@@ -2,6 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Badge from '../../components/Badge';
 import api from '../../api/axios';
+import ConfirmDialog from '../../components/ConfirmDialog';
+import FormField from '../../components/FormField';
+import useFormValidation from '../../hooks/useFormValidation';
+import { textName, phone, email } from '../../utils/validation';
 
 const empty = { name: '', phone: '', email: '', description: '', status: 'Active' };
 
@@ -23,6 +27,11 @@ export default function Builders() {
   const [form, setForm] = useState(empty);
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
+  const v = useFormValidation(form, {
+    name: textName('Builder name'),
+    phone,
+    email,
+  });
 
   const load = () => {
     setLoading(true);
@@ -38,6 +47,7 @@ export default function Builders() {
     setEditingId(null);
     setForm(empty);
     setFormError('');
+    v.reset();
     setShowForm(true);
   };
 
@@ -45,15 +55,21 @@ export default function Builders() {
     setEditingId(b.id);
     setForm({ name: b.name, phone: b.phone || '', email: b.email || '', description: b.description || '', status: b.status });
     setFormError('');
+    v.reset();
     setShowForm(true);
   };
 
-  const closeForm = () => { setShowForm(false); setEditingId(null); setForm(empty); setFormError(''); };
+  const closeForm = () => { setShowForm(false); setEditingId(null); setForm(empty); setFormError(''); v.reset(); };
+
+  const setField = (key, val) => {
+    setForm((f) => ({ ...f, [key]: val }));
+    v.touch(key);
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setFormError('');
-    if (!form.name.trim()) { setFormError('Builder Name is required.'); return; }
+    if (!v.validate()) return;
     setSaving(true);
     try {
       if (editingId) {
@@ -70,13 +86,27 @@ export default function Builders() {
     }
   };
 
-  const handleDelete = async (b) => {
-    if (!window.confirm(`Delete builder "${b.name}"? This can be restored from the database if needed, but won't show up here anymore.`)) return;
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
+  const handleDelete = (b) => {
+    setDeleteError('');
+    setPendingDelete(b);
+  };
+
+  const runDelete = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    setDeleteError('');
     try {
-      await api.delete(`/builders/${b.id}`);
-      setBuilders((prev) => prev.filter((x) => x.id !== b.id));
+      await api.delete(`/builders/${pendingDelete.id}`);
+      setBuilders((prev) => prev.filter((x) => x.id !== pendingDelete.id));
+      setPendingDelete(null);
     } catch (err) {
-      window.alert(err.response?.data?.message || 'Could not delete builder.');
+      setDeleteError(err.response?.data?.message || 'Could not delete builder.');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -97,20 +127,26 @@ export default function Builders() {
         <div className="card" style={{ marginBottom: 20 }}>
           <div className="card-title" style={{ marginBottom: 16 }}>{editingId ? 'Edit Builder' : 'New Builder'}</div>
           {formError && <div className="auth-error">{formError}</div>}
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleSubmit} noValidate>
             <div className="form-grid">
-              <div className="form-field"><label>Builder Name</label><input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
-              <div className="form-field"><label>Phone</label><input type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+91 98200 12345" /></div>
-              <div className="form-field"><label>Email</label><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></div>
-              <div className="form-field"><label>Status</label>
-                <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+              <FormField label="Builder Name" required error={v.show('name')}>
+                <input value={form.name} onChange={(e) => setField('name', e.target.value)} onBlur={() => v.touch('name')} />
+              </FormField>
+              <FormField label="Phone" error={v.show('phone')}>
+                <input type="tel" value={form.phone} onChange={(e) => setField('phone', e.target.value)} onBlur={() => v.touch('phone')} placeholder="+91 98200 12345" />
+              </FormField>
+              <FormField label="Email" error={v.show('email')}>
+                <input type="email" value={form.email} onChange={(e) => setField('email', e.target.value)} onBlur={() => v.touch('email')} />
+              </FormField>
+              <FormField label="Status">
+                <select value={form.status} onChange={(e) => setField('status', e.target.value)}>
                   <option value="Active">Active</option>
                   <option value="Inactive">Inactive</option>
                 </select>
-              </div>
-              <div className="form-field" style={{ gridColumn: 'span 2' }}><label>Description</label>
-                <input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Notes about this builder..." />
-              </div>
+              </FormField>
+              <FormField label="Description" style={{ gridColumn: 'span 2' }}>
+                <input value={form.description} onChange={(e) => setField('description', e.target.value)} placeholder="Notes about this builder..." />
+              </FormField>
             </div>
             <div style={{ marginTop: 16 }}>
               <button className="btn btn-primary" disabled={saving}>{saving ? 'Saving...' : (editingId ? 'Save Changes' : 'Create Builder')}</button>{' '}
@@ -159,6 +195,17 @@ export default function Builders() {
           </table>
         </div>
       </div>
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Delete builder"
+          message={`Delete builder "${pendingDelete.name}"? It won't show up in this list anymore.`}
+          busy={deleting}
+          error={deleteError}
+          onConfirm={runDelete}
+          onCancel={() => { if (!deleting) { setPendingDelete(null); setDeleteError(''); } }}
+        />
+      )}
     </>
   );
 }

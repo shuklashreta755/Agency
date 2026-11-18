@@ -15,7 +15,7 @@ import React, { useEffect, useRef, useState } from 'react';
  * `options` always comes from the caller's real, dynamically-loaded API/Redux
  * data — this component never invents or hardcodes any values itself.
  */
-export default function SearchableSelect({ value, onChange, options, placeholder = 'All', minWidth = 160, variant = 'toolbar' }) {
+export default function SearchableSelect({ value, onChange, options, placeholder = 'All', minWidth = 160, variant = 'toolbar', invalid = false, onBlur }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const containerRef = useRef(null);
@@ -27,13 +27,14 @@ export default function SearchableSelect({ value, onChange, options, placeholder
   useEffect(() => {
     const handler = (e) => {
       if (containerRef.current && !containerRef.current.contains(e.target)) {
+        if (open) onBlur?.();
         setOpen(false);
         setQuery('');
       }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
-  }, []);
+  }, [open, onBlur]);
 
   const q = query.trim().toLowerCase();
   const filtered = q ? options.filter((o) => o.label.toLowerCase().includes(q)) : options;
@@ -60,9 +61,10 @@ export default function SearchableSelect({ value, onChange, options, placeholder
   const displayValue = open ? query : (selected ? selected.label : '');
   const showClear = !open && !!value;
 
+  const borderColor = invalid ? 'var(--red)' : 'var(--border)';
   const baseStyle = isForm
-    ? { border: '1px solid var(--border)', borderRadius: 9, padding: '10px 30px 10px 30px', fontSize: 13, background: 'var(--bg)', width: '100%', color: 'var(--text-900)' }
-    : { border: '1px solid var(--border)', borderRadius: 9, padding: '9px 28px 9px 28px', fontSize: 13, background: 'var(--card)', minWidth, color: 'var(--text-900)' };
+    ? { border: `1px solid ${borderColor}`, borderRadius: 9, padding: '10px 30px 10px 30px', fontSize: 13, background: 'var(--bg)', width: '100%', color: 'var(--text-900)' }
+    : { border: `1px solid ${borderColor}`, borderRadius: 9, padding: '9px 28px 9px 28px', fontSize: 13, background: 'var(--card)', minWidth, color: 'var(--text-900)' };
 
   return (
     <div ref={containerRef} style={{ position: 'relative', width: isForm ? '100%' : 'auto' }}>
@@ -83,6 +85,7 @@ export default function SearchableSelect({ value, onChange, options, placeholder
           onFocus={openDropdown}
           onClick={openDropdown}
           onChange={(e) => { setQuery(e.target.value); if (!open) setOpen(true); }}
+          onBlur={() => { if (!open) onBlur?.(); }}
           onKeyDown={handleKeyDown}
           style={{ ...baseStyle, boxSizing: 'border-box', outline: open ? '2px solid var(--blue-500)' : 'none', outlineOffset: -1, cursor: open ? 'text' : 'pointer' }}
         />

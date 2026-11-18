@@ -4,7 +4,8 @@ const { INSTALLMENT_STATUSES } = require('../constants/unitEnums');
 
 // Auto-generated from the unit's Payment Plan when the unit is created (see
 // unitController.generateInstallments). `percentage` is fixed once created;
-// `amount` is recalculated whenever the unit's totalPrice changes.
+// `amount` is recalculated whenever the unit's totalPrice or advance changes.
+// Installment 1 is that percentage minus the unit's advance.
 const Installment = sequelize.define('Installment', {
   id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
   unitId: { type: DataTypes.UUID, allowNull: false, field: 'unit_id' },

@@ -24,13 +24,13 @@ import AddressAutocomplete from './AddressAutocomplete';
  * city: string — the currently-selected city from LocationSelect
  * onChange: (string[]) => void
  */
-export default function LocalAddresses({ value = [], onChange, city }) {
+export default function LocalAddresses({ value = [], onChange, city, error }) {
   const remove = (addr) => onChange(value.filter((a) => a !== addr));
 
   return (
     <div className="form-grid" style={{ marginTop: 16 }}>
-      <div className="form-field" style={{ gridColumn: 'span 2' }}>
-        <label>Local Addresses (Multiple)</label>
+      <div className={`form-field${error ? ' has-error' : ''}`} style={{ gridColumn: 'span 2' }}>
+        <label>Local Addresses (Multiple)<span className="field-required"> *</span></label>
         <div className="cell-sub" style={{ margin: '-2px 0 8px' }}>
           {city ? 'Search a saved address for this city or add a new one' : 'Select a city above first'}
         </div>
@@ -40,11 +40,12 @@ export default function LocalAddresses({ value = [], onChange, city }) {
           onChange={onChange}
           placeholder="Search or enter area / locality"
         />
+        {error && <div className="field-error">{error}</div>}
       </div>
 
-      <div className="form-field">
+      <div className={`form-field${error ? ' has-error' : ''}`}>
         <label>Added Local Addresses</label>
-        <div style={{ border: '1px solid var(--border)', borderRadius: 9, padding: 12, minHeight: 78, background: 'var(--bg)', boxSizing: 'border-box' }}>
+        <div style={{ border: `1px solid ${error ? 'var(--red)' : 'var(--border)'}`, borderRadius: 9, padding: 12, minHeight: 78, background: 'var(--bg)', boxSizing: 'border-box' }}>
           {value.length === 0 ? (
             <div className="cell-sub">No addresses added yet</div>
           ) : (

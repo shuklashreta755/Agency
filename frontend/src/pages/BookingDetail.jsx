@@ -5,6 +5,9 @@ import KpiCard from '../components/KpiCard';
 import SearchableSelect from '../components/SearchableSelect';
 import { Icons } from '../components/icons';
 import api from '../api/axios';
+import FormField from '../components/FormField';
+import useFormValidation from '../hooks/useFormValidation';
+import { required, exactAmount, positiveNumber } from '../utils/validation';
 
 const emptyPaymentForm = { paymentDate: '', paymentMethod: '', amount: '', transactionRef: '', remarks: '' };
 const fmt = (v) => `₹${Number(v || 0).toLocaleString('en-IN')}`;
@@ -26,6 +29,16 @@ export default function BookingDetail({ isAgent }) {
   const [payForm, setPayForm] = useState(emptyPaymentForm);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
+  const allInstForVal = booking?.installments || [];
+  const latestCycleForVal = allInstForVal.length ? Math.max(...allInstForVal.map((i) => i.cycleNumber || 1)) : 1;
+  const pendingInstallment = allInstForVal
+    .filter((i) => (i.cycleNumber || 1) === latestCycleForVal)
+    .find((i) => i.status === 'Pending');
+  const v = useFormValidation(payForm, {
+    paymentDate: required('Payment date'),
+    paymentMethod: required('Payment method'),
+    amount: pendingInstallment ? exactAmount(pendingInstallment.amount) : positiveNumber('Amount'),
+  });
 
   const load = async () => {
     setLoading(true);
@@ -60,29 +73,33 @@ export default function BookingDetail({ isAgent }) {
   // existed and therefore have no value stored for it (same fallback the
   // backend uses when generating the installment schedule itself).
   const totalAmount = booking.sellingPrice != null ? Number(booking.sellingPrice) : Number(booking.amount);
-  const paidAmount = installments.filter((i) => i.status === 'Paid').reduce((sum, i) => sum + Number(i.amount), 0);
-  const pendingAmount = totalAmount - paidAmount;
-  const progress = totalAmount ? Math.round((paidAmount / totalAmount) * 100) : 0;
+  const firstInstallment = installments.find((i) => Number(i.sequenceNumber) === 1);
+  const firstGross = firstInstallment
+    ? Number(((totalAmount * Number(firstInstallment.percentage)) / 100).toFixed(2))
+    : 0;
+  // Difference between the plan's first installment and the stored amount is the advance already taken off.
+  const advanceApplied = firstInstallment ? Math.max(0, Number((firstGross - Number(firstInstallment.amount)).toFixed(2))) : 0;
+  const paidInstallments = installments.filter((i) => i.status === 'Paid').reduce((sum, i) => sum + Number(i.amount), 0);
+  const paidAmount = paidInstallments + advanceApplied;
+  const pendingAmount = Math.max(0, Number((totalAmount - paidAmount).toFixed(2)));
+  const progress = totalAmount ? Math.min(100, Math.round((paidAmount / totalAmount) * 100)) : 0;
   const currentPayable = installments.find((i) => i.status === 'Pending');
+
+  const setPayField = (key, val) => {
+    setPayForm((f) => ({ ...f, [key]: val }));
+    v.touch(key);
+  };
 
   const handlePay = async (e) => {
     e.preventDefault();
     setFormError('');
-    if (!payForm.paymentDate || !payForm.paymentMethod || payForm.amount === '') {
-      setFormError('Payment Date, Payment Method and Amount are required.');
-      return;
-    }
-    const expected = Number(currentPayable.amount);
-    const entered = Number(payForm.amount);
-    if (Math.abs(entered - expected) > 0.01) {
-      setFormError(`Amount must be exactly ${fmt(expected)} for this installment — not more, not less.`);
-      return;
-    }
+    if (!v.validate()) return;
     setSaving(true);
     try {
       const { data } = await api.post(`/bookings/${id}/installments/${currentPayable.id}/pay`, payForm);
       setBooking(data.data);
       setPayForm(emptyPaymentForm);
+      v.reset();
     } catch (err) {
       setFormError(err.response?.data?.message || 'Could not record payment.');
     } finally {
@@ -117,6 +134,7 @@ export default function BookingDetail({ isAgent }) {
 
       <div className="card-title" style={{ marginBottom: 14 }}>
         Payment Plan Details {latestCycle > 1 && <span className="badge blue" style={{ marginLeft: 8 }}>Cycle {latestCycle}</span>}
+        {advanceApplied > 0 && <span>Advance of {fmt(advanceApplied)} is deducted from the first installment.</span>}
       </div>
       <div className="kpi-row">
         <KpiCard label="Total Amount" value={fmt(totalAmount)} icon={Icons.bookings} color="var(--blue-600)" bg="var(--blue-100)" />
@@ -154,33 +172,40 @@ export default function BookingDetail({ isAgent }) {
                         {canManage ? (
                           <div className="card" style={{ margin: '4px 0 10px', boxShadow: 'none', background: 'var(--bg)' }}>
                             <div className="card-title" style={{ marginBottom: 12, fontSize: 13.5 }}>Enter Payment Details</div>
-                            <form onSubmit={handlePay}>
+                            <form onSubmit={handlePay} noValidate>
                               <div className="form-grid">
-                                <div className="form-field"><label>Payment Date</label>
-                                  <input required type="date" value={payForm.paymentDate} onChange={(e) => setPayForm({ ...payForm, paymentDate: e.target.value })} />
-                                </div>
-                                <div className="form-field"><label>Payment Method</label>
+                                <FormField label="Payment Date" required error={v.show('paymentDate')}>
+                                  <input type="date" value={payForm.paymentDate} onChange={(e) => setPayField('paymentDate', e.target.value)} onBlur={() => v.touch('paymentDate')} />
+                                </FormField>
+                                <FormField label="Payment Method" required error={v.show('paymentMethod')}>
                                   <SearchableSelect
                                     variant="form" placeholder="Select payment method" value={payForm.paymentMethod}
-                                    onChange={(val) => setPayForm({ ...payForm, paymentMethod: val })}
+                                    invalid={!!v.show('paymentMethod')}
+                                    onBlur={() => v.touch('paymentMethod')}
+                                    onChange={(val) => setPayField('paymentMethod', val)}
                                     options={paymentMethods.map((m) => ({ value: m, label: m }))}
                                   />
-                                </div>
-                                <div className="form-field"><label>Amount (₹)</label>
+                                </FormField>
+                                <FormField
+                                  label="Amount (₹)"
+                                  required
+                                  error={v.show('amount')}
+                                  hint={!v.show('amount') ? `This installment requires exactly ${fmt(currentPayable.amount)}.` : undefined}
+                                >
                                   <input
-                                    required type="number" step="0.01"
+                                    type="number" step="0.01"
                                     value={payForm.amount}
-                                    onChange={(e) => setPayForm({ ...payForm, amount: e.target.value })}
+                                    onChange={(e) => setPayField('amount', e.target.value)}
+                                    onBlur={() => v.touch('amount')}
                                     placeholder={`Must be exactly ${fmt(currentPayable.amount)}`}
                                   />
-                                  <span className="cell-sub">This installment requires exactly {fmt(currentPayable.amount)}.</span>
-                                </div>
-                                <div className="form-field"><label>Transaction / Reference No. (optional)</label>
-                                  <input value={payForm.transactionRef} onChange={(e) => setPayForm({ ...payForm, transactionRef: e.target.value })} placeholder="Enter transaction no." />
-                                </div>
-                                <div className="form-field"><label>Remarks (optional)</label>
-                                  <input value={payForm.remarks} onChange={(e) => setPayForm({ ...payForm, remarks: e.target.value })} placeholder="Enter remarks" />
-                                </div>
+                                </FormField>
+                                <FormField label="Transaction / Reference No. (optional)">
+                                  <input value={payForm.transactionRef} onChange={(e) => setPayField('transactionRef', e.target.value)} placeholder="Enter transaction no." />
+                                </FormField>
+                                <FormField label="Remarks (optional)">
+                                  <input value={payForm.remarks} onChange={(e) => setPayField('remarks', e.target.value)} placeholder="Enter remarks" />
+                                </FormField>
                               </div>
                               {formError && <div className="cell-sub" style={{ color: 'var(--red)', marginTop: 10 }}>{formError}</div>}
                               <div style={{ marginTop: 14 }}>

@@ -87,7 +87,7 @@ export default function MyProjectDetail() {
         <KpiCard label="Total Units" value={summary?.totalUnits ?? 0} icon={Icons.properties} color="#2f6fed" bg="var(--blue-100)" />
         <KpiCard label="Available Units" value={summary?.availableUnits ?? 0} icon={Icons.leads} color="#1fb579" bg="var(--green-bg)" />
         <KpiCard label="Booked Units" value={summary?.bookedUnits ?? 0} icon={Icons.reports} color="#7c5cf0" bg="var(--purple-bg)" />
-        <KpiCard label="Booked / On Hold" value={summary?.bookedOrOnHoldUnits ?? 0} icon={Icons.history} color="#e8a13b" bg="var(--amber-bg)" />
+        <KpiCard label="Booked" value={summary?.booked?? 0} icon={Icons.history} color="#e8a13b" bg="var(--amber-bg)" />
       </div>
 
       <div className="settings-tabs">

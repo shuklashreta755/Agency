@@ -4,6 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import { RecaptchaVerifier, signInWithPhoneNumber } from 'firebase/auth';
 import { firebaseAuth } from '../firebase';
 import { loginWithFirebaseToken, clearAuthError } from '../store/authSlice';
+import FormField from '../components/FormField';
+import { requiredPhone, otpCode } from '../utils/validation';
 
 const RESEND_SECONDS = 60;
 
@@ -42,6 +44,8 @@ export default function Login() {
   const [sending, setSending] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [localError, setLocalError] = useState('');
+  const [phoneError, setPhoneError] = useState('');
+  const [otpError, setOtpError] = useState('');
   const [secondsLeft, setSecondsLeft] = useState(RESEND_SECONDS);
 
   const confirmationResultRef = useRef(null);
@@ -96,6 +100,9 @@ export default function Login() {
 
   const handleSendOtp = (e) => {
     e.preventDefault();
+    const err = requiredPhone('Phone number')(phone);
+    setPhoneError(err);
+    if (err) return;
     sendOtp(toE164(phone));
   };
 
@@ -106,6 +113,9 @@ export default function Login() {
 
   const handleVerify = async (e) => {
     e.preventDefault();
+    const err = otpCode(otp);
+    setOtpError(err);
+    if (err) return;
     if (!confirmationResultRef.current) return;
     setLocalError('');
     dispatch(clearAuthError());
@@ -134,6 +144,8 @@ export default function Login() {
     recaptchaVerifierRef.current?.clear?.();
     recaptchaVerifierRef.current = null;
     setOtp('');
+    setOtpError('');
+    setPhoneError('');
     setLocalError('');
     dispatch(clearAuthError());
     setStep('phone');
@@ -149,18 +161,20 @@ export default function Login() {
         {error && <div className="auth-error">{error}</div>}
 
         {step === 'phone' && (
-          <form onSubmit={handleSendOtp}>
-            <div className="form-field" style={{ marginBottom: 20 }}>
-              <label>Phone Number</label>
+          <form onSubmit={handleSendOtp} noValidate>
+            <FormField label="Phone Number" required error={phoneError} style={{ marginBottom: 20 }}>
               <input
                 type="tel"
-                required
                 placeholder="+91 98200 12345"
                 value={phone}
-                onChange={(e) => setPhone(e.target.value)}
+                onChange={(e) => {
+                  setPhone(e.target.value);
+                  setPhoneError(requiredPhone('Phone number')(e.target.value));
+                }}
+                onBlur={() => setPhoneError(requiredPhone('Phone number')(phone))}
                 autoFocus
               />
-            </div>
+            </FormField>
             <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} disabled={sending}>
               {sending ? 'Sending OTP...' : 'Send OTP'}
             </button>
@@ -168,22 +182,24 @@ export default function Login() {
         )}
 
         {step === 'otp' && (
-          <form onSubmit={handleVerify}>
-            <div className="form-field" style={{ marginBottom: 14 }}>
-              <label>6-Digit OTP</label>
+          <form onSubmit={handleVerify} noValidate>
+            <FormField label="6-Digit OTP" required error={otpError} style={{ marginBottom: 14 }}>
               <input
                 ref={otpInputRef}
                 type="text"
                 inputMode="numeric"
-                pattern="[0-9]{6}"
                 maxLength={6}
-                required
                 placeholder="••••••"
                 value={otp}
-                onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
+                onChange={(e) => {
+                  const next = e.target.value.replace(/\D/g, '');
+                  setOtp(next);
+                  setOtpError(otpCode(next));
+                }}
+                onBlur={() => setOtpError(otpCode(otp))}
                 style={{ letterSpacing: 6, fontSize: 18, textAlign: 'center' }}
               />
-            </div>
+            </FormField>
 
             <div style={{ textAlign: 'center', fontSize: 12.5, color: 'var(--text-600)', marginBottom: 18 }}>
               {secondsLeft > 0 ? (
