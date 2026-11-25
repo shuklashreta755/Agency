@@ -10,6 +10,6 @@ export const UNIT_FEATURES = [
   "Near Children's Play Area", 'Near Gym', 'Near Temple', 'Near School',
 ];
 
-export const UNIT_STATUSES = ['Available', 'Booked', 'Sold', 'On Hold'];
+export const UNIT_STATUSES = ['Available', 'Booked', 'Sold'];
 
 export const INSTALLMENT_STATUSES = ['Pending', 'Paid', 'Overdue'];

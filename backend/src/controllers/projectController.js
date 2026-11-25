@@ -38,6 +38,12 @@ async function rememberBuilder(brokerId, builderName) {
   }
 }
 
+// HTML number/date inputs submit an empty optional field as ''. PostgreSQL
+// rejects that for DECIMAL/DATE columns, so persist a real NULL instead.
+const optionalValue = (value) => (
+  value === undefined || value === null || value === '' ? null : value
+);
+
 // GET /api/projects
 // Broker: every project in the tenant. Agent: only projects they've been assigned to.
 async function list(req, res) {
@@ -83,11 +89,10 @@ async function getOne(req, res) {
     if (!isAssigned) return res.status(403).json({ message: 'You are not assigned to this project.' });
   }
 
-  const [total, available, sold, onHold, booked] = await Promise.all([
+  const [total, available, sold, booked] = await Promise.all([
     Unit.count({ where: { projectId: project.id } }),
     Unit.count({ where: { projectId: project.id, status: 'Available' } }),
     Unit.count({ where: { projectId: project.id, status: 'Sold' } }),
-    Unit.count({ where: { projectId: project.id, status: 'On Hold' } }),
     Unit.count({ where: { projectId: project.id, status: 'Booked' } }),
   ]);
 
@@ -95,7 +100,7 @@ async function getOne(req, res) {
     data: project,
     unitSummary: {
       totalUnits: total, availableUnits: available, soldUnits: sold,
-      bookedOrOnHoldUnits: booked + onHold, bookedUnits: booked,
+      bookedOrOnHoldUnits: booked, bookedUnits: booked,
     },
   });
 }
@@ -138,9 +143,12 @@ async function create(req, res) {
   const localAddressList = Array.isArray(localAddresses) ? localAddresses.filter((a) => a && a.trim()) : [];
 
   const project = await Project.create({
-    brokerId: req.brokerId, name, builderName, projectType, reraNumber, launchDate, possessionDate,
+    brokerId: req.brokerId, name, builderName, projectType, reraNumber,
+    launchDate: optionalValue(launchDate), possessionDate: optionalValue(possessionDate),
     description, country, state, city, address: address || localAddressList.join(', ') || null,
-    localAddresses: localAddressList, minPrice, maxPrice, status, latitude, longitude,
+    localAddresses: localAddressList,
+    minPrice: optionalValue(minPrice), maxPrice: optionalValue(maxPrice), status,
+    latitude: optionalValue(latitude), longitude: optionalValue(longitude),
   });
 
   await rememberLocalAddresses(req.brokerId, city, localAddressList);
@@ -183,9 +191,12 @@ async function update(req, res) {
   const localAddressList = Array.isArray(localAddresses) ? localAddresses.filter((a) => a && a.trim()) : [];
 
   await project.update({
-    name, builderName, projectType, reraNumber, launchDate, possessionDate,
+    name, builderName, projectType, reraNumber,
+    launchDate: optionalValue(launchDate), possessionDate: optionalValue(possessionDate),
     description, country, state, city, address: address || localAddressList.join(', ') || null,
-    localAddresses: localAddressList, minPrice, maxPrice, status, latitude, longitude,
+    localAddresses: localAddressList,
+    minPrice: optionalValue(minPrice), maxPrice: optionalValue(maxPrice), status,
+    latitude: optionalValue(latitude), longitude: optionalValue(longitude),
   });
 
   await rememberLocalAddresses(req.brokerId, city, localAddressList);
